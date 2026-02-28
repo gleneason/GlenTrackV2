@@ -7,21 +7,20 @@
 
   <!-- PWA -->
   <meta name="theme-color" content="#0B1220" />
-  <link rel="manifest" href="./manifest.json?v=3" />
-  <link rel="apple-touch-icon" href="./apple-touch-icon.png?v=3" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-2" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Glen Track" />
 
-  <!-- Styles / App (cache-busted) -->
-  <link rel="stylesheet" href="./app.css?v=3" />
-  <script defer src="./app.js?v=3"></script>
+  <link rel="stylesheet" href="app.css?v=2026-2" />
+  <script defer src="app.js?v=2026-2"></script>
 </head>
 
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="brandIcon" src="./icon-192.png?v=3" alt="Glen Track icon" />
+      <img class="brandIcon" src="icon-192.png" alt="Glen Track icon" />
       <div class="brandText">
         <div class="brandName">Glen Track</div>
         <div class="brandTag">Clean execution. Close the day.</div>
@@ -29,6 +28,8 @@
     </div>
 
     <div class="topActions">
+      <button class="chip hidden" id="btnBackToCal" aria-label="Back to calendar">Back</button>
+
       <button class="chip" id="btnPrevDay" aria-label="Previous day">‹</button>
       <button class="chip chipWide" id="btnPickDay" aria-label="Pick day">
         <span id="uiDateLabel">Today</span>
@@ -88,7 +89,7 @@
           <button class="rowBtn" id="btnWeighIn">
             <span class="rowLeft">
               <span class="rowTitle">Weekly weigh-in</span>
-              <span class="rowSub" id="uiWeighInSub">Weekly only</span>
+              <span class="rowSub" id="uiWeighInSub">—</span>
             </span>
             <span class="rowRight" id="uiWeighInMark">—</span>
           </button>
@@ -99,6 +100,7 @@
         <div class="ctaRow">
           <button class="btn ghost" id="btnQuickLog">Quick Log</button>
           <button class="btn primary" id="btnCloseDay" disabled>Close Today</button>
+          <button class="btn danger ghost hidden" id="btnReopenDay">Reopen</button>
         </div>
 
         <div class="subtle" id="uiCloseHint">Log food or a workout to enable Close Today.</div>
@@ -159,7 +161,7 @@
           <button class="btn ghost" id="btnCopyPrevDay">Copy yesterday</button>
         </div>
 
-        <div class="miniRow">
+        <div class="miniRow miniRow4">
           <div class="miniItem"><span class="miniK">Calories</span><span class="miniV" id="uiFoodTotCals">—</span></div>
           <div class="miniItem"><span class="miniK">Protein</span><span class="miniV" id="uiFoodTotP">—</span></div>
           <div class="miniItem"><span class="miniK">Carbs</span><span class="miniV" id="uiFoodTotC">—</span></div>
@@ -192,6 +194,7 @@
         <div id="workoutEditor" class="workoutEditor hidden">
           <div class="divider"></div>
           <div class="row">
+            <button class="btn danger ghost" id="btnUndoWorkoutComplete">Undo Complete</button>
             <button class="btn ghost" id="btnMarkWorkoutComplete">Mark Complete</button>
             <button class="btn primary" id="btnSaveWorkoutLog">Save Workout</button>
           </div>
@@ -199,6 +202,7 @@
           <div id="exerciseEditor"></div>
           <div class="row">
             <button class="btn ghost" id="btnAddExercise">Add exercise</button>
+            <button class="btn ghost" id="btnSaveAsTemplate">Save as template</button>
           </div>
         </div>
       </div>
@@ -329,7 +333,7 @@
         </div>
 
         <div class="row">
-          <button class="btn primary" id="btnSaveSettings">Save</button>
+          <button class="btn" id="btnSaveSettings">Save</button>
         </div>
       </div>
     </section>
@@ -339,24 +343,29 @@
   <nav class="bottomNav" aria-label="Bottom navigation">
     <div class="bottomNavInner">
       <button class="navItem active" data-nav="today" aria-label="Today">
-        <span class="navIcon">▦</span><span class="navLabel">Today</span>
+        <span class="navIcon">▦</span>
+        <span class="navLabel">Today</span>
       </button>
       <button class="navItem" data-nav="food" aria-label="Food">
-        <span class="navIcon">⌁</span><span class="navLabel">Food</span>
+        <span class="navIcon">⌁</span>
+        <span class="navLabel">Food</span>
       </button>
       <button class="navItem" data-nav="workouts" aria-label="Workouts">
-        <span class="navIcon">⟡</span><span class="navLabel">Workouts</span>
+        <span class="navIcon">⟡</span>
+        <span class="navLabel">Workouts</span>
       </button>
       <button class="navItem" data-nav="calendar" aria-label="Calendar">
-        <span class="navIcon">▣</span><span class="navLabel">Calendar</span>
+        <span class="navIcon">▣</span>
+        <span class="navLabel">Calendar</span>
       </button>
       <button class="navItem" data-nav="analytics" aria-label="Analytics">
-        <span class="navIcon">≋</span><span class="navLabel">Stats</span>
+        <span class="navIcon">≋</span>
+        <span class="navLabel">Stats</span>
       </button>
     </div>
   </nav>
 
-  <!-- Modal (starts hidden) -->
+  <!-- Modal -->
   <div class="modalOverlay hidden" id="modalOverlay" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modalHead">
