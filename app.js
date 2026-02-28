@@ -1,1069 +1,1062 @@
-/* Glen Track V2 – single-file app (no frameworks)
-   - Dark mode only
-   - Food library (saved items)
-   - Daily food logging + planned meals
-   - Workout planning + completed workouts
-   - Weekly weigh-in tracking
-   - Today screen auto-updates from stored data
-   - Modal guaranteed closable
-*/
+/* Glen Track V2 – fixes: safe-area, scrolling, modal scroll, undo actions, templates */
 
-(() => {
-  const $ = (id) => document.getElementById(id);
+const LS_KEY = "glenTrackV2:data";
+const LS_VER = 2;
 
-  // ---------- Service Worker (GitHub Pages + iOS safe) ----------
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./service-worker.js?v=3").catch(() => {});
-    });
-  }
+const $ = (id) => document.getElementById(id);
+const qsa = (sel) => Array.from(document.querySelectorAll(sel));
 
-  // ---------- Storage ----------
-  const KEY = "glen-track-v2-state";
-  const todayISO = () => {
-    const d = new Date();
-    d.setHours(0,0,0,0);
-    return d.toISOString().slice(0,10);
-  };
-  const addDays = (iso, n) => {
-    const d = new Date(iso + "T00:00:00");
-    d.setDate(d.getDate() + n);
-    return d.toISOString().slice(0,10);
-  };
-  const fmtDate = (iso) => {
-    const d = new Date(iso + "T00:00:00");
-    return d.toLocaleDateString(undefined, { weekday:"short", month:"short", day:"numeric" });
-  };
-  const weekStartISO = (iso) => {
-    const d = new Date(iso + "T00:00:00");
-    const day = d.getDay(); // 0 Sun
-    d.setDate(d.getDate() - day);
-    return d.toISOString().slice(0,10);
-  };
-  const clampNum = (v, fallback=0) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
-  };
+/* -------------------------
+   Data model
+-------------------------- */
+function todayKey(d = new Date()) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+function addDays(key, delta) {
+  const d = new Date(key + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  return todayKey(d);
+}
+function startOfWeekKey(key, weekStartsMonday = false) {
+  const d = new Date(key + "T00:00:00");
+  const day = d.getDay(); // 0 Sun
+  const offset = weekStartsMonday ? (day === 0 ? 6 : day - 1) : day;
+  d.setDate(d.getDate() - offset);
+  return todayKey(d);
+}
+function formatShort(key) {
+  const d = new Date(key + "T00:00:00");
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+function formatMonth(d) {
+  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
 
-  const defaultState = () => ({
-    v: 1,
-    selectedDay: todayISO(),
-    settings: {
-      calorieTarget: 2200,
-      proteinTarget: 190,
-      weighDay: 1, // Monday default
-    },
-    // Food library: [{id,name,cals,protein,carbs,fat}]
+function defaultState() {
+  return {
+    v: LS_VER,
+    settings: { cals: 2200, protein: 190, weighDay: 1 }, // Monday default
+    day: {}, // dayKey -> { closed:boolean, food:{logged:[], planned:[]}, workout:{planned:[], completed:boolean, completedAt?:ts}, }
     foodLibrary: [
-      { id: crypto.randomUUID(), name: "Chicken breast (6oz)", cals: 280, protein: 52, carbs: 0, fat: 6 },
-      { id: crypto.randomUUID(), name: "Rice (1 cup cooked)", cals: 205, protein: 4, carbs: 45, fat: 0 },
-      { id: crypto.randomUUID(), name: "Greek yogurt (1 cup)", cals: 150, protein: 20, carbs: 8, fat: 2 },
-      { id: crypto.randomUUID(), name: "Banana (1 medium)", cals: 105, protein: 1, carbs: 27, fat: 0 },
-      { id: crypto.randomUUID(), name: "Salmon (6oz)", cals: 360, protein: 39, carbs: 0, fat: 22 },
+      { name: "Greek yogurt", cals: 150, p: 20, c: 8, f: 2, unit: "1 cup" },
+      { name: "Banana", cals: 105, p: 1, c: 27, f: 0, unit: "1 medium" },
+      { name: "Eggs", cals: 70, p: 6, c: 0, f: 5, unit: "1 egg" },
+      { name: "Chicken breast", cals: 165, p: 31, c: 0, f: 4, unit: "100g" },
+      { name: "Rice (cooked)", cals: 206, p: 4, c: 45, f: 0, unit: "1 cup" }
     ],
-    // days[iso] = { closed:boolean, food:{meals:[...]}, workout:{planned:[...], completed:boolean, completedAt?}, weighIn?:{lbs, dateISO} }
-    days: {},
-    // completed workout history: [{iso, exercises:[...]}]
-    workoutHistory: []
-  });
-
-  const load = () => {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (!raw) return defaultState();
-      const parsed = JSON.parse(raw);
-      return { ...defaultState(), ...parsed };
-    } catch {
-      return defaultState();
-    }
+    templates: [
+      { id: cryptoId(), name: "Full Body A", exercises: [
+        { muscle:"Chest", name:"Bench press", sets:3, reps:8, notes:"" },
+        { muscle:"Back", name:"Lat pulldown", sets:3, reps:10, notes:"" },
+        { muscle:"Legs", name:"Squat", sets:3, reps:8, notes:"" },
+        { muscle:"Arms", name:"Curls", sets:3, reps:12, notes:"" },
+      ]},
+      { id: cryptoId(), name: "Full Body B", exercises: [
+        { muscle:"Legs", name:"Deadlift", sets:3, reps:5, notes:"" },
+        { muscle:"Chest", name:"Incline DB press", sets:3, reps:10, notes:"" },
+        { muscle:"Back", name:"Row", sets:3, reps:10, notes:"" },
+        { muscle:"Shoulders", name:"Overhead press", sets:3, reps:8, notes:"" },
+      ]},
+    ],
+    workoutHistory: [], // {id, dayKey, name, exercises, completedAt}
+    weighIns: [], // {id, dayKey(week start or actual day), weight}
+    exerciseLibrary: defaultExerciseLibrary()
   };
+}
 
-  const save = () => localStorage.setItem(KEY, JSON.stringify(state));
-
-  let state = load();
-
-  const ensureDay = (iso) => {
-    if (!state.days[iso]) {
-      state.days[iso] = {
-        closed: false,
-        food: { meals: [] }, // meals: [{id,type:'logged'|'planned', title, cals,p,c,f, time?}]
-        workout: { planned: [], completed: false },
-      };
-    }
-    return state.days[iso];
-  };
-
-  // ---------- Modal (bulletproof close) ----------
-  const modalOverlay = $("modalOverlay");
-  const modalTitle = $("modalTitle");
-  const modalBody = $("modalBody");
-  const modalFoot = $("modalFoot");
-  const modalCloseBtn = $("modalClose");
-
-  function openModal({ title, bodyHTML, footHTML }) {
-    modalTitle.textContent = title || "Modal";
-    modalBody.innerHTML = bodyHTML || "";
-    modalFoot.innerHTML = footHTML || "";
-    modalOverlay.classList.remove("hidden");
-    modalOverlay.setAttribute("aria-hidden", "false");
-  }
-
-  function closeModal() {
-    modalOverlay.classList.add("hidden");
-    modalOverlay.setAttribute("aria-hidden", "true");
-    modalBody.innerHTML = "";
-    modalFoot.innerHTML = "";
-  }
-
-  // close on X
-  modalCloseBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    closeModal();
-  });
-
-  // close when tapping outside the modal card
-  modalOverlay.addEventListener("click", (e) => {
-    if (e.target === modalOverlay) closeModal();
-  });
-
-  // escape key
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !modalOverlay.classList.contains("hidden")) closeModal();
-  });
-
-  // ---------- Toast ----------
-  const toast = $("toast");
-  let toastTimer = null;
-  function showToast(msg="Updated ✓") {
-    toast.textContent = msg;
-    toast.classList.remove("hidden");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toast.classList.add("hidden"), 1200);
-  }
-
-  // ---------- Navigation ----------
-  const screens = Array.from(document.querySelectorAll(".screen"));
-  const navItems = Array.from(document.querySelectorAll(".navItem"));
-
-  function go(screenName) {
-    screens.forEach(s => s.classList.toggle("active", s.dataset.screen === screenName));
-    navItems.forEach(b => b.classList.toggle("active", b.dataset.nav === screenName));
-    renderAll();
-  }
-
-  navItems.forEach(btn => btn.addEventListener("click", () => go(btn.dataset.nav)));
-
-  // ---------- Date Controls ----------
-  const uiDateLabel = $("uiDateLabel");
-  const btnPrevDay = $("btnPrevDay");
-  const btnNextDay = $("btnNextDay");
-  const btnPickDay = $("btnPickDay");
-
-  function setSelectedDay(iso) {
-    state.selectedDay = iso;
-    save();
-    renderAll();
-  }
-
-  btnPrevDay.addEventListener("click", () => setSelectedDay(addDays(state.selectedDay, -1)));
-  btnNextDay.addEventListener("click", () => setSelectedDay(addDays(state.selectedDay, +1)));
-
-  btnPickDay.addEventListener("click", () => {
-    const current = state.selectedDay;
-    openModal({
-      title: "Pick a day",
-      bodyHTML: `
-        <label class="field">
-          <span>Date</span>
-          <input id="pickDate" type="date" value="${current}" />
-        </label>
-      `,
-      footHTML: `
-        <button class="btn ghost" id="pickCancel">Cancel</button>
-        <button class="btn primary" id="pickSave">Set</button>
-      `
-    });
-
-    $("pickCancel").onclick = closeModal;
-    $("pickSave").onclick = () => {
-      const v = $("pickDate").value || todayISO();
-      closeModal();
-      setSelectedDay(v);
-    };
-  });
-
-  // ---------- Today Screen Elements ----------
-  const uiStatusLine = $("uiStatusLine");
-  const uiStatusPill = $("uiStatusPill");
-  const uiCals = $("uiCals");
-  const uiCalsHint = $("uiCalsHint");
-  const uiProtein = $("uiProtein");
-  const uiProteinHint = $("uiProteinHint");
-  const uiCarbs = $("uiCarbs");
-  const uiFat = $("uiFat");
-
-  const uiFoodSub = $("uiFoodSub");
-  const uiWorkoutSub = $("uiWorkoutSub");
-  const uiWeighInSub = $("uiWeighInSub");
-
-  const uiFoodMark = $("uiFoodMark");
-  const uiWorkoutMark = $("uiWorkoutMark");
-  const uiWeighInMark = $("uiWeighInMark");
-
-  const btnGoFood = $("btnGoFood");
-  const btnGoWorkouts = $("btnGoWorkouts");
-  const btnWeighIn = $("btnWeighIn");
-
-  const btnQuickLog = $("btnQuickLog");
-  const btnCloseDay = $("btnCloseDay");
-  const uiCloseHint = $("uiCloseHint");
-
-  btnGoFood.addEventListener("click", () => go("food"));
-  btnGoWorkouts.addEventListener("click", () => go("workouts"));
-
-  // ---------- Food Screen Elements ----------
-  const uiFoodDateSub = $("uiFoodDateSub");
-  const btnFoodLibrary = $("btnFoodLibrary");
-  const btnCopyPrevDay = $("btnCopyPrevDay");
-  const mealList = $("mealList");
-  const uiFoodTotCals = $("uiFoodTotCals");
-  const uiFoodTotP = $("uiFoodTotP");
-  const uiFoodTotC = $("uiFoodTotC");
-  const uiFoodTotF = $("uiFoodTotF");
-
-  // ---------- Workouts Screen Elements ----------
-  const uiWorkoutDateSub = $("uiWorkoutDateSub");
-  const btnTemplates = $("btnTemplates");
-  const btnPlanWorkout = $("btnPlanWorkout");
-  const workoutEditor = $("workoutEditor");
-  const uiWorkoutStatus = $("uiWorkoutStatus");
-  const exerciseEditor = $("exerciseEditor");
-  const btnAddExercise = $("btnAddExercise");
-  const btnMarkWorkoutComplete = $("btnMarkWorkoutComplete");
-  const btnSaveWorkoutLog = $("btnSaveWorkoutLog");
-  const workoutHistory = $("workoutHistory");
-
-  // ---------- Calendar ----------
-  const btnCalPrev = $("btnCalPrev");
-  const btnCalNext = $("btnCalNext");
-  const uiCalTitle = $("uiCalTitle");
-  const calGrid = $("calGrid");
-
-  // ---------- Analytics ----------
-  const btnExport = $("btnExport");
-  const uiAnalyticsWeek = $("uiAnalyticsWeek");
-  const anClosed = $("anClosed");
-  const anWorkouts = $("anWorkouts");
-  const anAvgCals = $("anAvgCals");
-  const anAvgProtein = $("anAvgProtein");
-  const weighInList = $("weighInList");
-  const btnLogWeighIn = $("btnLogWeighIn");
-  const btnReset = $("btnReset");
-  const setCals = $("setCals");
-  const setProtein = $("setProtein");
-  const setWeighDay = $("setWeighDay");
-  const btnSaveSettings = $("btnSaveSettings");
-
-  // ---------- Helpers: totals ----------
-  function dayTotals(iso) {
-    const day = ensureDay(iso);
-    const logged = day.food.meals.filter(m => m.type === "logged");
-    const totals = logged.reduce((acc,m) => {
-      acc.cals += clampNum(m.cals);
-      acc.p += clampNum(m.p);
-      acc.c += clampNum(m.c);
-      acc.f += clampNum(m.f);
-      return acc;
-    }, {cals:0,p:0,c:0,f:0});
-    return totals;
-  }
-
-  function hasFoodLogged(iso) {
-    const day = ensureDay(iso);
-    return day.food.meals.some(m => m.type === "logged");
-  }
-
-  function hasWorkoutCompleted(iso) {
-    const day = ensureDay(iso);
-    return !!day.workout.completed;
-  }
-
-  // ---------- Quick Log ----------
-  btnQuickLog.addEventListener("click", () => {
-    const iso = state.selectedDay;
-    openModal({
-      title: "Quick Log",
-      bodyHTML: `
-        <div class="sub">Fast entry for today. Adds to <b>logged</b> totals.</div>
-        <div style="height:10px"></div>
-
-        <label class="field">
-          <span>Type</span>
-          <select id="qlType">
-            <option value="food">Food</option>
-            <option value="workout">Workout complete</option>
-            <option value="weigh">Weekly weigh-in</option>
-          </select>
-        </label>
-
-        <div id="qlForm"></div>
-      `,
-      footHTML: `
-        <button class="btn ghost" id="qlCancel">Cancel</button>
-        <button class="btn primary" id="qlSave">Save</button>
-      `
-    });
-
-    const qlForm = $("qlForm");
-    const qlType = $("qlType");
-
-    const renderQL = () => {
-      const t = qlType.value;
-      if (t === "food") {
-        qlForm.innerHTML = `
-          <label class="field"><span>Food name</span><input id="qlName" placeholder="e.g., Chicken + rice" /></label>
-          <div class="exInputs" style="grid-template-columns:repeat(4,1fr)">
-            <input id="qlCals" inputmode="numeric" placeholder="Cals" />
-            <input id="qlP" inputmode="numeric" placeholder="Protein" />
-            <input id="qlC" inputmode="numeric" placeholder="Carbs" />
-            <input id="qlF" inputmode="numeric" placeholder="Fat" />
-          </div>
-          <label style="display:flex;gap:10px;align-items:center;margin-top:10px">
-            <input id="qlSaveToLib" type="checkbox" />
-            <span class="sub">Save this item to Food Library</span>
-          </label>
-        `;
-      } else if (t === "workout") {
-        qlForm.innerHTML = `
-          <div class="sub">Marks workout completed for <b>${fmtDate(iso)}</b>.</div>
-        `;
-      } else {
-        qlForm.innerHTML = `
-          <label class="field"><span>Weight (lbs)</span><input id="qlLbs" inputmode="decimal" placeholder="e.g., 195.0" /></label>
-          <div class="sub">Tip: one weigh-in per week (recommended).</div>
-        `;
-      }
-    };
-
-    qlType.addEventListener("change", renderQL);
-    renderQL();
-
-    $("qlCancel").onclick = closeModal;
-    $("qlSave").onclick = () => {
-      const t = qlType.value;
-      const day = ensureDay(iso);
-
-      if (t === "food") {
-        const name = ($("qlName").value || "").trim() || "Food";
-        const cals = clampNum($("qlCals").value);
-        const p = clampNum($("qlP").value);
-        const c = clampNum($("qlC").value);
-        const f = clampNum($("qlF").value);
-
-        day.food.meals.push({
-          id: crypto.randomUUID(),
-          type: "logged",
-          title: name,
-          cals, p, c, f,
-          time: new Date().toISOString()
-        });
-
-        if ($("qlSaveToLib").checked) {
-          state.foodLibrary.unshift({ id: crypto.randomUUID(), name, cals, protein:p, carbs:c, fat:f });
-        }
-
-        save();
-        closeModal();
-        showToast("Food logged ✓");
-        renderAll();
-        return;
-      }
-
-      if (t === "workout") {
-        day.workout.completed = true;
-        day.workout.completedAt = new Date().toISOString();
-
-        // Save snapshot to workoutHistory if planned exists
-        if (day.workout.planned?.length) {
-          state.workoutHistory.unshift({ iso, exercises: JSON.parse(JSON.stringify(day.workout.planned)) });
-          state.workoutHistory = state.workoutHistory.slice(0, 50);
-        }
-
-        save();
-        closeModal();
-        showToast("Workout complete ✓");
-        renderAll();
-        return;
-      }
-
-      // weigh
-      const lbs = clampNum($("qlLbs").value, NaN);
-      if (!Number.isFinite(lbs) || lbs <= 0) {
-        showToast("Enter weight");
-        return;
-      }
-      day.weighIn = { lbs, dateISO: iso };
-      save();
-      closeModal();
-      showToast("Weigh-in saved ✓");
-      renderAll();
-    };
-  });
-
-  // ---------- Close Day ----------
-  btnCloseDay.addEventListener("click", () => {
-    const iso = state.selectedDay;
-    const day = ensureDay(iso);
-    day.closed = true;
-    save();
-    showToast("Day closed ✓");
-    renderAll();
-  });
-
-  // ---------- Weigh-in button ----------
-  btnWeighIn.addEventListener("click", () => {
-    const iso = state.selectedDay;
-    openModal({
-      title: "Weekly weigh-in",
-      bodyHTML: `
-        <div class="sub">Log your weight for <b>${fmtDate(iso)}</b>.</div>
-        <div style="height:10px"></div>
-        <label class="field">
-          <span>Weight (lbs)</span>
-          <input id="wiLbs" inputmode="decimal" placeholder="e.g., 195.0" />
-        </label>
-        <div class="sub">Recommended: one entry per week.</div>
-      `,
-      footHTML: `
-        <button class="btn ghost" id="wiCancel">Cancel</button>
-        <button class="btn primary" id="wiSave">Save</button>
-      `
-    });
-
-    $("wiCancel").onclick = closeModal;
-    $("wiSave").onclick = () => {
-      const lbs = clampNum($("wiLbs").value, NaN);
-      if (!Number.isFinite(lbs) || lbs <= 0) {
-        showToast("Enter weight");
-        return;
-      }
-      const day = ensureDay(iso);
-      day.weighIn = { lbs, dateISO: iso };
-      save();
-      closeModal();
-      showToast("Weigh-in saved ✓");
-      renderAll();
-    };
-  });
-
-  // ---------- Food: Library ----------
-  btnFoodLibrary.addEventListener("click", () => {
-    const rows = state.foodLibrary.map(item => `
-      <div class="listItem">
-        <div class="listTitle">${escapeHTML(item.name)}</div>
-        <div class="listSub">${item.cals} cals · P ${item.protein} · C ${item.carbs} · F ${item.fat}</div>
-        <div class="listActions">
-          <button class="btn primary" data-add="${item.id}">Log</button>
-          <button class="btn ghost" data-plan="${item.id}">Plan</button>
-          <button class="btn danger ghost" data-del="${item.id}">Delete</button>
-        </div>
-      </div>
-    `).join("");
-
-    openModal({
-      title: "Food Library",
-      bodyHTML: `
-        <div class="sub">Tap <b>Log</b> to count it today. Tap <b>Plan</b> to schedule without counting.</div>
-        <div style="height:10px"></div>
-        <div class="list">${rows || `<div class="sub">No saved items yet.</div>`}</div>
-        <div style="height:12px"></div>
-        <div class="divider"></div>
-        <div class="h2">Add new</div>
-        <div style="height:10px"></div>
-        <label class="field"><span>Name</span><input id="libName" placeholder="e.g., Salmon + rice" /></label>
-        <div class="exInputs" style="grid-template-columns:repeat(4,1fr)">
-          <input id="libCals" inputmode="numeric" placeholder="Cals" />
-          <input id="libP" inputmode="numeric" placeholder="Protein" />
-          <input id="libC" inputmode="numeric" placeholder="Carbs" />
-          <input id="libF" inputmode="numeric" placeholder="Fat" />
-        </div>
-      `,
-      footHTML: `
-        <button class="btn ghost" id="libClose">Close</button>
-        <button class="btn primary" id="libAdd">Save Item</button>
-      `
-    });
-
-    // actions
-    modalBody.querySelectorAll("[data-add]").forEach(btn => btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-add");
-      const item = state.foodLibrary.find(x => x.id === id);
-      if (!item) return;
-      logFoodFromLibrary(item, "logged");
-      showToast("Food logged ✓");
-      renderAll();
-    }));
-
-    modalBody.querySelectorAll("[data-plan]").forEach(btn => btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-plan");
-      const item = state.foodLibrary.find(x => x.id === id);
-      if (!item) return;
-      logFoodFromLibrary(item, "planned");
-      showToast("Planned ✓");
-      renderAll();
-    }));
-
-    modalBody.querySelectorAll("[data-del]").forEach(btn => btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-del");
-      state.foodLibrary = state.foodLibrary.filter(x => x.id !== id);
-      save();
-      closeModal();
-      showToast("Deleted ✓");
-      renderAll();
-    }));
-
-    $("libClose").onclick = closeModal;
-    $("libAdd").onclick = () => {
-      const name = ($("libName").value || "").trim();
-      if (!name) { showToast("Add a name"); return; }
-      const cals = clampNum($("libCals").value);
-      const protein = clampNum($("libP").value);
-      const carbs = clampNum($("libC").value);
-      const fat = clampNum($("libF").value);
-
-      state.foodLibrary.unshift({ id: crypto.randomUUID(), name, cals, protein, carbs, fat });
-      save();
-      closeModal();
-      showToast("Saved ✓");
-      renderAll();
-    };
-  });
-
-  function logFoodFromLibrary(item, type) {
-    const iso = state.selectedDay;
-    const day = ensureDay(iso);
-    day.food.meals.push({
-      id: crypto.randomUUID(),
-      type,
-      title: item.name,
-      cals: item.cals,
-      p: item.protein,
-      c: item.carbs,
-      f: item.fat,
-      time: new Date().toISOString()
-    });
-    save();
-  }
-
-  // Copy yesterday -> planned meals copy as planned + logged copy as logged (keeps behavior simple)
-  btnCopyPrevDay.addEventListener("click", () => {
-    const iso = state.selectedDay;
-    const prev = addDays(iso, -1);
-    const prevDay = ensureDay(prev);
-    const curDay = ensureDay(iso);
-    curDay.food.meals = JSON.parse(JSON.stringify(prevDay.food.meals || []));
-    save();
-    showToast("Copied ✓");
-    renderAll();
-  });
-
-  // ---------- Workouts: templates + editor ----------
-  const exerciseLibrary = [
-    "Bench Press","Incline DB Press","Push-ups","Overhead Press","Lateral Raises",
-    "Pull-ups","Lat Pulldown","Barbell Row","DB Row","Face Pulls",
-    "Squat","Front Squat","Leg Press","RDL","Deadlift",
-    "Lunges","Leg Curl","Leg Extension","Calf Raises",
-    "Bicep Curls","Hammer Curls","Tricep Pushdown","Skull Crushers",
-    "Plank","Hanging Leg Raise","Cable Crunch","Farmer Carry"
+function defaultExerciseLibrary() {
+  return [
+    ["Chest", ["Bench press","Incline bench press","Dumbbell press","Push-ups","Chest fly"]],
+    ["Back", ["Pull-ups","Lat pulldown","Barbell row","Dumbbell row","Seated cable row"]],
+    ["Shoulders", ["Overhead press","Dumbbell shoulder press","Lateral raise","Rear delt fly","Face pulls"]],
+    ["Arms", ["Biceps curls","Hammer curls","Triceps pushdown","Skull crushers","Dips"]],
+    ["Legs", ["Squat","Front squat","Deadlift","Romanian deadlift","Leg press","Lunge"]],
+    ["Core", ["Plank","Hanging leg raise","Crunch","Ab wheel","Pallof press"]],
+    ["Cardio", ["Walking","Jogging","Cycling","Row machine","Stair climber"]]
   ];
+}
 
-  btnTemplates.addEventListener("click", () => {
-    const templates = [
-      { name:"Full Body A", ex:[
-        {name:"Squat", sets:3, reps:8, weight:""},
-        {name:"Bench Press", sets:3, reps:8, weight:""},
-        {name:"Barbell Row", sets:3, reps:10, weight:""},
-        {name:"Plank", sets:3, reps:45, weight:"sec"},
-      ]},
-      { name:"Full Body B", ex:[
-        {name:"Deadlift", sets:3, reps:5, weight:""},
-        {name:"Overhead Press", sets:3, reps:8, weight:""},
-        {name:"Lat Pulldown", sets:3, reps:10, weight:""},
-        {name:"Bicep Curls", sets:3, reps:12, weight:""},
-      ]},
-    ];
+function loadState() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    // soft migrate
+    const s = { ...defaultState(), ...parsed };
+    s.settings = { ...defaultState().settings, ...(parsed.settings || {}) };
+    s.day = parsed.day || {};
+    s.foodLibrary = parsed.foodLibrary || defaultState().foodLibrary;
+    s.templates = parsed.templates || defaultState().templates;
+    s.workoutHistory = parsed.workoutHistory || [];
+    s.weighIns = parsed.weighIns || [];
+    s.exerciseLibrary = parsed.exerciseLibrary || defaultExerciseLibrary();
+    s.v = LS_VER;
+    return s;
+  } catch {
+    return defaultState();
+  }
+}
+function saveState() {
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+}
 
-    openModal({
-      title: "Templates",
-      bodyHTML: `
-        <div class="sub">Apply a template to the selected day.</div>
-        <div style="height:10px"></div>
-        <div class="list">
-          ${templates.map((t,i)=>`
-            <div class="listItem">
-              <div class="listTitle">${t.name}</div>
-              <div class="listSub">${t.ex.map(x=>x.name).join(" · ")}</div>
-              <div class="listActions">
-                <button class="btn primary" data-t="${i}">Use</button>
-              </div>
-            </div>
-          `).join("")}
+function cryptoId() {
+  return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
+}
+
+function ensureDay(key) {
+  if (!state.day[key]) {
+    state.day[key] = {
+      closed: false,
+      food: { logged: [], planned: [] },
+      workout: { planned: [], completed: false, name: "" }
+    };
+  }
+  return state.day[key];
+}
+
+/* -------------------------
+   App state
+-------------------------- */
+let state = loadState();
+let selectedDay = todayKey();
+let currentScreen = "today";
+let previousScreenForBack = null;
+
+/* -------------------------
+   Service worker
+-------------------------- */
+(function registerSW(){
+  if (!("serviceWorker" in navigator)) return;
+  window.addEventListener("load", async () => {
+    try { await navigator.serviceWorker.register("./service-worker.js"); }
+    catch {}
+  });
+})();
+
+/* -------------------------
+   Modal / toast
+-------------------------- */
+function openModal(title, bodyHTML, footHTML = "") {
+  $("modalTitle").textContent = title;
+  $("modalBody").innerHTML = bodyHTML;
+  $("modalFoot").innerHTML = footHTML;
+  $("modalOverlay").classList.remove("hidden");
+  $("modalOverlay").setAttribute("aria-hidden","false");
+  // close when tapping overlay backdrop
+  $("modalOverlay").onclick = (e) => {
+    if (e.target === $("modalOverlay")) closeModal();
+  };
+}
+function closeModal() {
+  $("modalOverlay").classList.add("hidden");
+  $("modalOverlay").setAttribute("aria-hidden","true");
+  $("modalOverlay").onclick = null;
+}
+$("modalClose").addEventListener("click", closeModal);
+
+let toastTimer = null;
+function toast(msg="Updated ✓") {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), 1400);
+}
+
+/* -------------------------
+   Navigation
+-------------------------- */
+function setScreen(name) {
+  currentScreen = name;
+  qsa(".screen").forEach(s => s.classList.remove("active"));
+  const el = document.querySelector(`.screen[data-screen="${name}"]`);
+  if (el) el.classList.add("active");
+
+  qsa(".navItem").forEach(b => b.classList.toggle("active", b.dataset.nav === name));
+  render();
+}
+qsa(".navItem").forEach(btn => {
+  btn.addEventListener("click", () => {
+    previousScreenForBack = null;
+    $("btnBackToCal").classList.add("hidden");
+    setScreen(btn.dataset.nav);
+  });
+});
+
+$("btnBackToCal").addEventListener("click", () => {
+  if (previousScreenForBack) setScreen(previousScreenForBack);
+  previousScreenForBack = null;
+  $("btnBackToCal").classList.add("hidden");
+});
+
+/* -------------------------
+   Day picker (prev/next)
+-------------------------- */
+$("btnPrevDay").addEventListener("click", () => { selectedDay = addDays(selectedDay, -1); render(); });
+$("btnNextDay").addEventListener("click", () => { selectedDay = addDays(selectedDay, +1); render(); });
+
+$("btnPickDay").addEventListener("click", () => {
+  // quick pick: today
+  const isToday = selectedDay === todayKey();
+  openModal(
+    "Pick day",
+    `
+      <div class="list">
+        <div class="listItem">
+          <div class="listTop">
+            <div class="listTitle">${isToday ? "Today (selected)" : "Today"}</div>
+            <button class="btn primary" id="mGoToday">Select</button>
+          </div>
+          <div class="listSub">${formatShort(todayKey())}</div>
         </div>
-      `,
-      footHTML: `<button class="btn ghost" id="tplClose">Close</button>`
-    });
-    $("tplClose").onclick = closeModal;
-
-    modalBody.querySelectorAll("[data-t]").forEach(btn => btn.addEventListener("click", () => {
-      const idx = Number(btn.getAttribute("data-t"));
-      const t = templates[idx];
-      const day = ensureDay(state.selectedDay);
-      day.workout.planned = JSON.parse(JSON.stringify(t.ex));
-      day.workout.completed = false;
-      save();
-      closeModal();
-      showToast("Planned ✓");
-      renderAll();
-    }));
-  });
-
-  btnPlanWorkout.addEventListener("click", () => {
-    const day = ensureDay(state.selectedDay);
-    if (!day.workout.planned.length) {
-      day.workout.planned = [{ name:"Bench Press", sets:3, reps:8, weight:"" }];
-    }
-    save();
-    workoutEditor.classList.remove("hidden");
-    renderWorkoutEditor();
-  });
-
-  btnAddExercise.addEventListener("click", () => {
-    openModal({
-      title: "Add exercise",
-      bodyHTML: `
-        <div class="sub">Choose from the list (more coming).</div>
-        <div style="height:10px"></div>
-        <div class="list">
-          ${exerciseLibrary.map(name=>`
-            <div class="listItem">
-              <div class="listTitle">${escapeHTML(name)}</div>
-              <div class="listActions">
-                <button class="btn primary" data-ex="${escapeAttr(name)}">Add</button>
-              </div>
-            </div>
-          `).join("")}
-        </div>
-      `,
-      footHTML: `<button class="btn ghost" id="exClose">Close</button>`
-    });
-    $("exClose").onclick = closeModal;
-
-    modalBody.querySelectorAll("[data-ex]").forEach(btn => btn.addEventListener("click", () => {
-      const name = btn.getAttribute("data-ex");
-      const day = ensureDay(state.selectedDay);
-      day.workout.planned.push({ name, sets:3, reps:10, weight:"" });
-      save();
-      closeModal();
-      showToast("Added ✓");
-      renderAll();
-    }));
-  });
-
-  btnMarkWorkoutComplete.addEventListener("click", () => {
-    const iso = state.selectedDay;
-    const day = ensureDay(iso);
-    day.workout.completed = true;
-    day.workout.completedAt = new Date().toISOString();
-    if (day.workout.planned?.length) {
-      state.workoutHistory.unshift({ iso, exercises: JSON.parse(JSON.stringify(day.workout.planned)) });
-      state.workoutHistory = state.workoutHistory.slice(0, 50);
-    }
-    save();
-    showToast("Workout complete ✓");
-    renderAll();
-  });
-
-  btnSaveWorkoutLog.addEventListener("click", () => {
-    save();
-    showToast("Workout saved ✓");
-    renderAll();
-  });
-
-  function renderWorkoutEditor() {
-    const day = ensureDay(state.selectedDay);
-    const planned = day.workout.planned || [];
-    exerciseEditor.innerHTML = planned.map((ex, idx) => `
-      <div class="exRow">
-        <div class="exTop">
-          <div class="exName">${escapeHTML(ex.name)}</div>
-          <button class="btn danger ghost" data-del-ex="${idx}">Remove</button>
-        </div>
-        <div class="exInputs">
-          <input data-sets="${idx}" inputmode="numeric" placeholder="Sets" value="${escapeAttr(ex.sets ?? "")}" />
-          <input data-reps="${idx}" inputmode="numeric" placeholder="Reps" value="${escapeAttr(ex.reps ?? "")}" />
-          <input data-wt="${idx}" placeholder="Weight" value="${escapeAttr(ex.weight ?? "")}" />
+        <div class="listItem">
+          <div class="listTop">
+            <div class="listTitle">Enter date</div>
+          </div>
+          <div class="listSub">YYYY-MM-DD</div>
+          <input id="mDateInput" type="date" />
         </div>
       </div>
-    `).join("");
+    `,
+    `<button class="btn" id="mClose">Close</button>`
+  );
+  $("mGoToday").onclick = () => { selectedDay = todayKey(); closeModal(); render(); };
+  $("mClose").onclick = closeModal;
+  $("mDateInput").onchange = (e) => {
+    const v = e.target.value;
+    if (v) { selectedDay = v; closeModal(); render(); }
+  };
+});
 
-    exerciseEditor.querySelectorAll("[data-del-ex]").forEach(btn => btn.addEventListener("click", () => {
-      const i = Number(btn.getAttribute("data-del-ex"));
-      day.workout.planned.splice(i,1);
-      save();
-      showToast("Removed ✓");
-      renderAll();
-    }));
+/* -------------------------
+   Buttons on Today
+-------------------------- */
+$("btnGoFood").addEventListener("click", () => setScreen("food"));
+$("btnGoWorkouts").addEventListener("click", () => setScreen("workouts"));
 
-    exerciseEditor.querySelectorAll("[data-sets]").forEach(inp => inp.addEventListener("input", () => {
-      const i = Number(inp.getAttribute("data-sets"));
-      day.workout.planned[i].sets = clampNum(inp.value);
-      save();
-    }));
-    exerciseEditor.querySelectorAll("[data-reps]").forEach(inp => inp.addEventListener("input", () => {
-      const i = Number(inp.getAttribute("data-reps"));
-      day.workout.planned[i].reps = clampNum(inp.value);
-      save();
-    }));
-    exerciseEditor.querySelectorAll("[data-wt]").forEach(inp => inp.addEventListener("input", () => {
-      const i = Number(inp.getAttribute("data-wt"));
-      day.workout.planned[i].weight = inp.value;
-      save();
-    }));
-  }
-
-  // ---------- Calendar ----------
-  let calAnchor = new Date(state.selectedDay + "T00:00:00");
-  calAnchor.setDate(1);
-
-  btnCalPrev.addEventListener("click", () => {
-    calAnchor.setMonth(calAnchor.getMonth() - 1);
-    renderCalendar();
-  });
-  btnCalNext.addEventListener("click", () => {
-    calAnchor.setMonth(calAnchor.getMonth() + 1);
-    renderCalendar();
-  });
-
-  function renderCalendar() {
-    const y = calAnchor.getFullYear();
-    const m = calAnchor.getMonth();
-    const title = new Date(y, m, 1).toLocaleDateString(undefined, { month:"long", year:"numeric" });
-    uiCalTitle.textContent = title;
-
-    const first = new Date(y, m, 1);
-    const startDay = first.getDay();
-    const daysInMonth = new Date(y, m+1, 0).getDate();
-
-    const cells = [];
-    for (let i=0;i<startDay;i++) cells.push(null);
-    for (let d=1; d<=daysInMonth; d++) {
-      const iso = new Date(y, m, d).toISOString().slice(0,10);
-      cells.push(iso);
-    }
-
-    calGrid.innerHTML = cells.map(iso => {
-      if (!iso) return `<div class="calCell" style="opacity:.22;pointer-events:none"></div>`;
-      const day = ensureDay(iso);
-      const dots = [];
-      if (day.closed) dots.push(`<span class="dot dotClosed"></span>`);
-      if (day.food.meals.some(x=>x.type==="logged")) dots.push(`<span class="dot dotFood"></span>`);
-      if (day.workout.completed) dots.push(`<span class="dot dotWo"></span>`);
-      if (day.food.meals.some(x=>x.type==="planned") || (day.workout.planned?.length && !day.workout.completed)) {
-        dots.push(`<span class="dot dotPlanned"></span>`);
-      }
-      const dd = Number(iso.slice(8,10));
-      return `
-        <div class="calCell" data-iso="${iso}">
-          <div class="d">${dd}</div>
-          <div class="dots">${dots.join("")}</div>
+$("btnQuickLog").addEventListener("click", () => {
+  openModal(
+    "Quick Log",
+    `
+      <div class="list">
+        <div class="listItem">
+          <div class="listTop">
+            <div class="listTitle">Add food (logged)</div>
+            <button class="btn primary" id="mQuickFood">Add</button>
+          </div>
+          <div class="listSub">Fast entry with calories + macros + serving size</div>
         </div>
-      `;
-    }).join("");
+        <div class="listItem">
+          <div class="listTop">
+            <div class="listTitle">Log weigh-in</div>
+            <button class="btn" id="mQuickWeight">Log</button>
+          </div>
+          <div class="listSub">One point per week</div>
+        </div>
+      </div>
+    `,
+    `<button class="btn" id="mClose">Close</button>`
+  );
+  $("mClose").onclick = closeModal;
+  $("mQuickFood").onclick = () => { closeModal(); openFoodAddModal({ mode:"logged" }); };
+  $("mQuickWeight").onclick = () => { closeModal(); openWeighInModal(); };
+});
 
-    calGrid.querySelectorAll("[data-iso]").forEach(cell => cell.addEventListener("click", () => {
-      const iso = cell.getAttribute("data-iso");
-      setSelectedDay(iso);
-      go("today");
-    }));
-  }
+$("btnCloseDay").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  d.closed = true;
+  saveState();
+  toast("Day closed ✓");
+  render();
+});
 
-  // ---------- Analytics / Settings ----------
-  btnSaveSettings.addEventListener("click", () => {
-    state.settings.calorieTarget = clampNum(setCals.value, 2200);
-    state.settings.proteinTarget = clampNum(setProtein.value, 190);
-    state.settings.weighDay = clampNum(setWeighDay.value, 1);
-    save();
-    showToast("Saved ✓");
-    renderAll();
-  });
+$("btnReopenDay").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  d.closed = false;
+  saveState();
+  toast("Reopened");
+  render();
+});
 
-  btnReset.addEventListener("click", () => {
-    openModal({
-      title: "Reset all data?",
-      bodyHTML: `<div class="sub">This will wipe food logs, workouts, and weigh-ins on this device.</div>`,
-      footHTML: `
-        <button class="btn ghost" id="rCancel">Cancel</button>
-        <button class="btn danger" id="rYes">Reset</button>
-      `
-    });
-    $("rCancel").onclick = closeModal;
-    $("rYes").onclick = () => {
-      state = defaultState();
-      save();
+$("btnWeighIn").addEventListener("click", openWeighInModal);
+
+/* -------------------------
+   Food
+-------------------------- */
+$("btnFoodLibrary").addEventListener("click", () => openFoodLibraryModal());
+$("btnCopyPrevDay").addEventListener("click", () => {
+  const prev = addDays(selectedDay, -1);
+  const dPrev = ensureDay(prev);
+  const d = ensureDay(selectedDay);
+  // copy logged + planned
+  d.food.logged = JSON.parse(JSON.stringify(dPrev.food.logged || []));
+  d.food.planned = JSON.parse(JSON.stringify(dPrev.food.planned || []));
+  saveState();
+  toast("Copied ✓");
+  render();
+});
+
+function foodTotals(dayKey, type="logged") {
+  const d = ensureDay(dayKey);
+  const items = d.food[type] || [];
+  return items.reduce((acc, it) => {
+    acc.cals += Number(it.cals||0);
+    acc.p += Number(it.p||0);
+    acc.c += Number(it.c||0);
+    acc.f += Number(it.f||0);
+    return acc;
+  }, {cals:0,p:0,c:0,f:0});
+}
+
+function openFoodLibraryModal() {
+  const rows = state.foodLibrary.map((it, idx) => `
+    <div class="listItem">
+      <div class="listTop">
+        <div class="listTitle">${escapeHtml(it.name)} <span style="color:#7E8AA3;font-weight:900">(${escapeHtml(it.unit||"")})</span></div>
+        <button class="btn primary" data-add="${idx}">Add</button>
+      </div>
+      <div class="listSub">${it.cals} cals • P ${it.p} • C ${it.c} • F ${it.f}</div>
+    </div>
+  `).join("");
+
+  openModal(
+    "Food Library",
+    `
+      <div class="list">
+        ${rows || `<div class="listItem"><div class="listTitle">No items yet</div></div>`}
+        <div class="listItem">
+          <div class="listTop">
+            <div class="listTitle">Create new library item</div>
+            <button class="btn" id="mNewLib">Create</button>
+          </div>
+          <div class="listSub">Saved items = no retyping later</div>
+        </div>
+      </div>
+    `,
+    `<button class="btn" id="mClose">Close</button>`
+  );
+  $("mClose").onclick = closeModal;
+
+  qsa("[data-add]").forEach(b => {
+    b.onclick = () => {
+      const idx = Number(b.getAttribute("data-add"));
       closeModal();
-      showToast("Reset ✓");
-      renderAll();
-      go("today");
+      openFoodAddModal({ mode:"logged", fromLibraryIndex: idx });
     };
   });
 
-  btnLogWeighIn.addEventListener("click", () => btnWeighIn.click());
+  $("mNewLib").onclick = () => {
+    closeModal();
+    openFoodCreateLibraryModal();
+  };
+}
 
-  btnExport.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type:"application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `glen-track-export-${todayISO()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    showToast("Exported ✓");
+function openFoodCreateLibraryModal() {
+  openModal(
+    "New library item",
+    `
+      <div class="formGrid">
+        <label class="field"><span>Name</span><input id="fName" placeholder="e.g., Salmon" /></label>
+        <label class="field"><span>Serving size (text)</span><input id="fUnit" placeholder="e.g., 6 oz" /></label>
+
+        <label class="field"><span>Calories</span><input id="fCals" type="number" inputmode="numeric" /></label>
+        <label class="field"><span>Protein (g)</span><input id="fP" type="number" inputmode="numeric" /></label>
+        <label class="field"><span>Carbs (g)</span><input id="fC" type="number" inputmode="numeric" /></label>
+        <label class="field"><span>Fat (g)</span><input id="fF" type="number" inputmode="numeric" /></label>
+      </div>
+    `,
+    `<button class="btn" id="mCancel">Cancel</button><button class="btn primary" id="mSave">Save</button>`
+  );
+  $("mCancel").onclick = closeModal;
+  $("mSave").onclick = () => {
+    const it = {
+      name: $("fName").value.trim() || "New item",
+      unit: $("fUnit").value.trim() || "",
+      cals: Number($("fCals").value||0),
+      p: Number($("fP").value||0),
+      c: Number($("fC").value||0),
+      f: Number($("fF").value||0),
+    };
+    state.foodLibrary.unshift(it);
+    saveState();
+    closeModal();
+    toast("Saved to library ✓");
+    render();
+  };
+}
+
+function openFoodAddModal({ mode="logged", fromLibraryIndex=null } = {}) {
+  const base = fromLibraryIndex!=null ? state.foodLibrary[fromLibraryIndex] : null;
+  openModal(
+    mode === "planned" ? "Add planned food" : "Add logged food",
+    `
+      <div class="formGrid">
+        <label class="field"><span>Food name</span><input id="aName" value="${escapeAttr(base?.name||"")}" placeholder="e.g., Chicken + rice" /></label>
+        <label class="field"><span>Serving size</span><input id="aUnit" value="${escapeAttr(base?.unit||"")}" placeholder="e.g., 6 oz / 1 cup / 100g" /></label>
+
+        <label class="field"><span>Calories</span><input id="aCals" type="number" inputmode="numeric" value="${base?.cals ?? ""}" /></label>
+        <label class="field"><span>Protein (g)</span><input id="aP" type="number" inputmode="numeric" value="${base?.p ?? ""}" /></label>
+        <label class="field"><span>Carbs (g)</span><input id="aC" type="number" inputmode="numeric" value="${base?.c ?? ""}" /></label>
+        <label class="field"><span>Fat (g)</span><input id="aF" type="number" inputmode="numeric" value="${base?.f ?? ""}" /></label>
+
+        <div class="listItem">
+          <div class="listSub">Tip: If this is something you’ll eat again, save it in Library after you add it.</div>
+        </div>
+      </div>
+    `,
+    `
+      <button class="btn" id="mCancel">Cancel</button>
+      <button class="btn" id="mSaveLib">Save to Library</button>
+      <button class="btn primary" id="mAdd">Add</button>
+    `
+  );
+  $("mCancel").onclick = closeModal;
+
+  $("mSaveLib").onclick = () => {
+    const it = readFoodForm();
+    state.foodLibrary.unshift({ name: it.name, unit: it.unit, cals: it.cals, p: it.p, c: it.c, f: it.f });
+    saveState();
+    toast("Saved to library ✓");
+  };
+
+  $("mAdd").onclick = () => {
+    const it = readFoodForm();
+    const d = ensureDay(selectedDay);
+    d.food[mode].push({ id: cryptoId(), ...it, ts: Date.now() });
+    saveState();
+    closeModal();
+    toast("Added ✓");
+    render();
+  };
+}
+
+function readFoodForm() {
+  return {
+    name: $("aName").value.trim() || "Food",
+    unit: $("aUnit").value.trim() || "",
+    cals: Number($("aCals").value||0),
+    p: Number($("aP").value||0),
+    c: Number($("aC").value||0),
+    f: Number($("aF").value||0),
+  };
+}
+
+/* -------------------------
+   Workouts
+-------------------------- */
+$("btnTemplates").addEventListener("click", openTemplatesModal);
+$("btnPlanWorkout").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  if (!d.workout) d.workout = { planned: [], completed:false, name:"" };
+  d.workout.planned = d.workout.planned || [];
+  $("workoutEditor").classList.remove("hidden");
+  renderWorkoutEditor();
+  saveState();
+});
+$("btnAddExercise").addEventListener("click", openExercisePickerModal);
+
+$("btnSaveWorkoutLog").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  if (!d.workout) return;
+  d.workout.name = d.workout.name || "Workout";
+  saveState();
+  toast("Saved ✓");
+  render();
+});
+
+$("btnMarkWorkoutComplete").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  if (!d.workout) return;
+  d.workout.completed = true;
+  d.workout.completedAt = Date.now();
+  // push to history (allow delete)
+  state.workoutHistory.unshift({
+    id: cryptoId(),
+    dayKey: selectedDay,
+    name: d.workout.name || "Workout",
+    exercises: JSON.parse(JSON.stringify(d.workout.planned || [])),
+    completedAt: d.workout.completedAt
+  });
+  saveState();
+  toast("Marked complete ✓");
+  render();
+});
+
+$("btnUndoWorkoutComplete").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  if (!d.workout) return;
+  d.workout.completed = false;
+  delete d.workout.completedAt;
+  // remove most recent history item for that day (if any)
+  const idx = state.workoutHistory.findIndex(h => h.dayKey === selectedDay);
+  if (idx >= 0) state.workoutHistory.splice(idx, 1);
+  saveState();
+  toast("Undone");
+  render();
+});
+
+$("btnSaveAsTemplate").addEventListener("click", () => {
+  const d = ensureDay(selectedDay);
+  const ex = (d.workout?.planned || []);
+  if (!ex.length) return toast("Add exercises first");
+  openModal(
+    "Save template",
+    `
+      <div class="formGrid">
+        <label class="field">
+          <span>Template name</span>
+          <input id="tName" placeholder="e.g., Push Day" />
+        </label>
+      </div>
+    `,
+    `<button class="btn" id="mCancel">Cancel</button><button class="btn primary" id="mSave">Save</button>`
+  );
+  $("mCancel").onclick = closeModal;
+  $("mSave").onclick = () => {
+    const name = $("tName").value.trim() || "My Template";
+    state.templates.unshift({ id: cryptoId(), name, exercises: JSON.parse(JSON.stringify(ex)) });
+    saveState();
+    closeModal();
+    toast("Template saved ✓");
+    render();
+  };
+});
+
+function openTemplatesModal() {
+  const list = state.templates.map(t => `
+    <div class="listItem">
+      <div class="listTop">
+        <div class="listTitle">${escapeHtml(t.name)}</div>
+        <div class="row">
+          <button class="btn" data-use="${t.id}">Use</button>
+          <button class="btn danger ghost" data-del="${t.id}">Delete</button>
+        </div>
+      </div>
+      <div class="listSub">${t.exercises.length} exercise(s)</div>
+    </div>
+  `).join("");
+
+  openModal(
+    "Templates",
+    `<div class="list">${list || `<div class="listItem"><div class="listTitle">No templates</div></div>`}</div>`,
+    `<button class="btn" id="mClose">Close</button>`
+  );
+  $("mClose").onclick = closeModal;
+
+  qsa("[data-use]").forEach(b => {
+    b.onclick = () => {
+      const id = b.getAttribute("data-use");
+      const t = state.templates.find(x => x.id === id);
+      if (!t) return;
+      const d = ensureDay(selectedDay);
+      d.workout = d.workout || { planned: [], completed:false, name:"" };
+      d.workout.name = t.name;
+      d.workout.planned = JSON.parse(JSON.stringify(t.exercises));
+      d.workout.completed = false;
+      delete d.workout.completedAt;
+      saveState();
+      closeModal();
+      $("workoutEditor").classList.remove("hidden");
+      toast("Template applied ✓");
+      render();
+    };
   });
 
-  // ---------- Rendering ----------
-  function renderAll() {
-    const iso = state.selectedDay;
-    ensureDay(iso);
+  qsa("[data-del]").forEach(b => {
+    b.onclick = () => {
+      const id = b.getAttribute("data-del");
+      state.templates = state.templates.filter(x => x.id !== id);
+      saveState();
+      closeModal();
+      toast("Template deleted");
+      render();
+    };
+  });
+}
 
-    // Date label
-    uiDateLabel.textContent = (iso === todayISO()) ? "Today" : fmtDate(iso);
-
-    // Settings inputs
-    setCals.value = String(state.settings.calorieTarget ?? 2200);
-    setProtein.value = String(state.settings.proteinTarget ?? 190);
-    setWeighDay.value = String(state.settings.weighDay ?? 1);
-
-    renderToday();
-    renderFood();
-    renderWorkouts();
-    renderCalendar();
-    renderAnalytics();
-  }
-
-  function renderToday() {
-    const iso = state.selectedDay;
-    const day = ensureDay(iso);
-    const totals = dayTotals(iso);
-
-    const cTarget = state.settings.calorieTarget ?? 2200;
-    const pTarget = state.settings.proteinTarget ?? 190;
-
-    uiCals.textContent = `${totals.cals} / ${cTarget}`;
-    uiCalsHint.textContent = `${Math.max(0, cTarget - totals.cals)} remaining`;
-    uiProtein.textContent = `${totals.p} / ${pTarget}g`;
-    uiProteinHint.textContent = `${Math.max(0, pTarget - totals.p)}g remaining`;
-
-    uiCarbs.textContent = `${totals.c}g`;
-    uiFat.textContent = `${totals.f}g`;
-
-    const status = day.closed ? "Closed" : "In Progress";
-    uiStatusLine.textContent = `Status: ${status}`;
-    uiStatusPill.textContent = status;
-
-    // Food summary
-    const loggedMeals = day.food.meals.filter(m => m.type === "logged").length;
-    uiFoodSub.textContent = loggedMeals ? `${loggedMeals} item(s) logged` : "Not logged";
-    uiFoodMark.textContent = loggedMeals ? "✓" : "—";
-
-    // Workout summary
-    if (day.workout.completed) {
-      uiWorkoutSub.textContent = "Completed";
-      uiWorkoutMark.textContent = "✓";
-    } else if (day.workout.planned?.length) {
-      uiWorkoutSub.textContent = `${day.workout.planned.length} exercise(s) planned`;
-      uiWorkoutMark.textContent = "•";
-    } else {
-      uiWorkoutSub.textContent = "Not logged";
-      uiWorkoutMark.textContent = "—";
-    }
-
-    // Weigh-in (weekly)
-    if (day.weighIn?.lbs) {
-      uiWeighInSub.textContent = `${day.weighIn.lbs} lbs`;
-      uiWeighInMark.textContent = "✓";
-    } else {
-      uiWeighInSub.textContent = "Weekly only";
-      uiWeighInMark.textContent = "—";
-    }
-
-    // Close Day enable
-    const canClose = !day.closed && (hasFoodLogged(iso) || hasWorkoutCompleted(iso));
-    btnCloseDay.disabled = !canClose;
-    uiCloseHint.textContent = canClose ? "Ready to close the day." : "Log food or a workout to enable Close Today.";
-  }
-
-  function renderFood() {
-    const iso = state.selectedDay;
-    const day = ensureDay(iso);
-    uiFoodDateSub.textContent = `Meals for ${iso === todayISO() ? "Today" : fmtDate(iso)}`;
-
-    const totals = dayTotals(iso);
-    uiFoodTotCals.textContent = String(totals.cals);
-    uiFoodTotP.textContent = String(totals.p);
-    uiFoodTotC.textContent = String(totals.c);
-    uiFoodTotF.textContent = String(totals.f);
-
-    // Group meals by logged/planned
-    const logged = day.food.meals.filter(m => m.type === "logged");
-    const planned = day.food.meals.filter(m => m.type === "planned");
-
-    const section = (title, arr) => `
-      <div class="card">
-        <div class="cardHead">
-          <div>
-            <div class="h2">${title}</div>
-            <div class="sub">${arr.length ? `${arr.length} item(s)` : "None"}</div>
-          </div>
-          <button class="btn ghost" data-add="${title}">Add</button>
+function openExercisePickerModal() {
+  // grouped by muscle, scrollable modal body (CSS already fixes)
+  const groups = state.exerciseLibrary.map(([muscle, items]) => {
+    const rows = items.map(name => `
+      <div class="listItem">
+        <div class="listTop">
+          <div class="listTitle">${escapeHtml(name)}</div>
+          <button class="btn primary" data-addex="${escapeAttr(muscle)}||${escapeAttr(name)}">Add</button>
         </div>
-        <div class="list">
-          ${arr.map(m => `
-            <div class="listItem">
-              <div class="listTitle">${escapeHTML(m.title)}</div>
-              <div class="listSub">${m.cals} cals · P ${m.p} · C ${m.c} · F ${m.f}</div>
-              <div class="listActions">
-                ${m.type === "planned" ? `<button class="btn primary" data-convert="${m.id}">Log it</button>` : ``}
-                <button class="btn danger ghost" data-del-meal="${m.id}">Delete</button>
-              </div>
-            </div>
-          `).join("")}
-        </div>
+        <div class="listSub">${escapeHtml(muscle)}</div>
       </div>
+    `).join("");
+    return `
+      <div class="listItem" style="background:rgba(255,255,255,.03)">
+        <div class="listTitle">${escapeHtml(muscle)}</div>
+      </div>
+      ${rows}
     `;
+  }).join("");
 
-    mealList.innerHTML = section("Logged", logged) + section("Planned", planned);
+  openModal(
+    "Add exercise",
+    `<div class="list">${groups}</div>`,
+    `<button class="btn" id="mClose">Close</button>`
+  );
+  $("mClose").onclick = closeModal;
 
-    mealList.querySelectorAll("[data-add]").forEach(btn => btn.addEventListener("click", () => {
-      // open library
-      btnFoodLibrary.click();
-    }));
+  qsa("[data-addex]").forEach(b => {
+    b.onclick = () => {
+      const [muscle, name] = b.getAttribute("data-addex").split("||");
+      const d = ensureDay(selectedDay);
+      d.workout = d.workout || { planned: [], completed:false, name:"" };
+      d.workout.planned.push({ muscle, name, sets: 3, reps: 10, notes: "" });
+      saveState();
+      closeModal();
+      toast("Exercise added ✓");
+      $("workoutEditor").classList.remove("hidden");
+      render();
+    };
+  });
+}
 
-    mealList.querySelectorAll("[data-del-meal]").forEach(btn => btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-del-meal");
-      day.food.meals = day.food.meals.filter(m => m.id !== id);
-      save();
-      showToast("Deleted ✓");
-      renderAll();
-    }));
+function renderWorkoutEditor() {
+  const d = ensureDay(selectedDay);
+  const w = d.workout || { planned: [], completed:false, name:"" };
 
-    mealList.querySelectorAll("[data-convert]").forEach(btn => btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-convert");
-      const meal = day.food.meals.find(m => m.id === id);
-      if (!meal) return;
-      meal.type = "logged";
-      save();
-      showToast("Logged ✓");
-      renderAll();
-    }));
-  }
-
-  function renderWorkouts() {
-    const iso = state.selectedDay;
-    const day = ensureDay(iso);
-    uiWorkoutDateSub.textContent = `For ${iso === todayISO() ? "Today" : fmtDate(iso)}`;
-
-    if (day.workout.completed) {
-      uiWorkoutStatus.textContent = "Workout completed ✓";
-      workoutEditor.classList.remove("hidden");
-    } else if (day.workout.planned?.length) {
-      uiWorkoutStatus.textContent = `${day.workout.planned.length} exercise(s) planned`;
-      workoutEditor.classList.remove("hidden");
-    } else {
-      uiWorkoutStatus.textContent = "No workout planned";
-      workoutEditor.classList.add("hidden");
-    }
-
-    if (!workoutEditor.classList.contains("hidden")) renderWorkoutEditor();
-
-    // history
-    workoutHistory.innerHTML = (state.workoutHistory || []).slice(0,12).map(h => `
-      <div class="listItem">
-        <div class="listTitle">${fmtDate(h.iso)}</div>
-        <div class="listSub">${(h.exercises||[]).map(x=>x.name).join(" · ") || "—"}</div>
+  const items = (w.planned || []).map((ex, idx) => `
+    <div class="listItem">
+      <div class="listTop">
+        <div class="listTitle">${escapeHtml(ex.name)}</div>
+        <button class="btn danger ghost" data-delx="${idx}">Remove</button>
       </div>
-    `).join("") || `<div class="sub" style="margin-top:10px">No completed workouts yet.</div>`;
-  }
-
-  function renderAnalytics() {
-    const iso = state.selectedDay;
-    const ws = weekStartISO(iso);
-    const weekDays = Array.from({length:7}, (_,i)=> addDays(ws, i));
-
-    uiAnalyticsWeek.textContent = `${fmtDate(ws)} → ${fmtDate(addDays(ws,6))}`;
-
-    let closed = 0, workouts = 0, calsSum = 0, pSum = 0, loggedDays = 0;
-
-    for (const d of weekDays) {
-      const day = ensureDay(d);
-      if (day.closed) closed++;
-      if (day.workout.completed) workouts++;
-      const t = dayTotals(d);
-      if (t.cals > 0 || t.p > 0) {
-        loggedDays++;
-        calsSum += t.cals;
-        pSum += t.p;
-      }
-    }
-
-    anClosed.textContent = String(closed);
-    anWorkouts.textContent = String(workouts);
-    anAvgCals.textContent = loggedDays ? String(Math.round(calsSum / loggedDays)) : "—";
-    anAvgProtein.textContent = loggedDays ? String(Math.round(pSum / loggedDays)) : "—";
-
-    // weigh-ins list (latest first)
-    const allWeigh = Object.keys(state.days)
-      .map(k => state.days[k]?.weighIn ? { iso:k, ...state.days[k].weighIn } : null)
-      .filter(Boolean)
-      .sort((a,b)=> (a.iso < b.iso ? 1 : -1));
-
-    weighInList.innerHTML = allWeigh.slice(0,20).map(w => `
-      <div class="listItem">
-        <div class="listTitle">${w.lbs} lbs</div>
-        <div class="listSub">${fmtDate(w.iso)}</div>
+      <div class="listSub">${escapeHtml(ex.muscle)} • Sets ${ex.sets} • Reps ${ex.reps}</div>
+      <div class="row" style="margin-top:10px">
+        <label class="field" style="flex:1">
+          <span>Sets</span>
+          <input type="number" inputmode="numeric" data-sets="${idx}" value="${ex.sets}" />
+        </label>
+        <label class="field" style="flex:1">
+          <span>Reps</span>
+          <input type="number" inputmode="numeric" data-reps="${idx}" value="${ex.reps}" />
+        </label>
       </div>
-    `).join("") || `<div class="sub" style="margin-top:10px">No weigh-ins yet.</div>`;
+      <label class="field" style="margin-top:10px">
+        <span>Notes</span>
+        <input data-notes="${idx}" value="${escapeAttr(ex.notes||"")}" placeholder="Optional" />
+      </label>
+    </div>
+  `).join("");
 
-    // Today screen “This Week” mini stats
-    $("uiClosedDays").textContent = `${closed}/7`;
-    $("uiWorkoutsWeek").textContent = String(workouts);
-    $("uiAvgCals").textContent = loggedDays ? String(Math.round(calsSum / loggedDays)) : "—";
-    $("uiAvgProtein").textContent = loggedDays ? String(Math.round(pSum / loggedDays)) : "—";
+  $("exerciseEditor").innerHTML = items || `<div class="listItem"><div class="listTitle">No exercises yet</div><div class="listSub">Tap “Add exercise”.</div></div>`;
 
-    // streak
-    // streak counts consecutive closed days ending at selected day, going backwards
-    let streak = 0;
-    let cursor = iso;
-    for (;;) {
-      const day = ensureDay(cursor);
-      if (!day.closed) break;
-      streak++;
-      cursor = addDays(cursor, -1);
+  qsa("[data-delx]").forEach(b => {
+    b.onclick = () => {
+      const i = Number(b.getAttribute("data-delx"));
+      w.planned.splice(i, 1);
+      d.workout = w;
+      saveState();
+      toast("Removed");
+      render();
+    };
+  });
+
+  qsa("[data-sets]").forEach(inp => {
+    inp.onchange = () => {
+      const i = Number(inp.getAttribute("data-sets"));
+      w.planned[i].sets = Number(inp.value||0);
+      saveState();
+    };
+  });
+  qsa("[data-reps]").forEach(inp => {
+    inp.onchange = () => {
+      const i = Number(inp.getAttribute("data-reps"));
+      w.planned[i].reps = Number(inp.value||0);
+      saveState();
+    };
+  });
+  qsa("[data-notes]").forEach(inp => {
+    inp.onchange = () => {
+      const i = Number(inp.getAttribute("data-notes"));
+      w.planned[i].notes = inp.value || "";
+      saveState();
+    };
+  });
+}
+
+/* -------------------------
+   Calendar
+-------------------------- */
+let calCursor = new Date(); // month cursor
+$("btnCalPrev").addEventListener("click", () => { calCursor.setMonth(calCursor.getMonth() - 1); renderCalendar(); });
+$("btnCalNext").addEventListener("click", () => { calCursor.setMonth(calCursor.getMonth() + 1); renderCalendar(); });
+
+function renderCalendar() {
+  $("uiCalTitle").textContent = formatMonth(calCursor);
+  const first = new Date(calCursor.getFullYear(), calCursor.getMonth(), 1);
+  const last = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 0);
+  const startDay = first.getDay(); // 0 Sun
+  const total = last.getDate();
+
+  const cells = [];
+  for (let i=0;i<startDay;i++) cells.push(null);
+  for (let d=1; d<=total; d++) cells.push(new Date(calCursor.getFullYear(), calCursor.getMonth(), d));
+
+  $("calGrid").innerHTML = cells.map(dt => {
+    if (!dt) return `<div class="calCell" style="opacity:.2"></div>`;
+    const key = todayKey(dt);
+    const day = ensureDay(key);
+    const dots = [];
+    if (day.closed) dots.push(`<span class="dot dotClosed"></span>`);
+    if ((day.food?.logged||[]).length) dots.push(`<span class="dot dotFood"></span>`);
+    if (day.workout?.completed) dots.push(`<span class="dot dotWo"></span>`);
+    if ((day.food?.planned||[]).length || (day.workout?.planned||[]).length) dots.push(`<span class="dot dotPlanned"></span>`);
+    return `
+      <button class="calCell" data-day="${key}" aria-label="${key}">
+        <div class="calDay">${dt.getDate()}</div>
+        <div class="calDots">${dots.join("")}</div>
+      </button>
+    `;
+  }).join("");
+
+  qsa("[data-day]").forEach(b => {
+    b.onclick = () => {
+      selectedDay = b.getAttribute("data-day");
+      // go to Today but provide a visible Back-to-Calendar chip
+      previousScreenForBack = "calendar";
+      $("btnBackToCal").classList.remove("hidden");
+      setScreen("today");
+      toast(formatShort(selectedDay));
+    };
+  });
+}
+
+/* -------------------------
+   Analytics / weigh-ins / settings
+-------------------------- */
+$("btnLogWeighIn").addEventListener("click", openWeighInModal);
+$("btnSaveSettings").addEventListener("click", () => {
+  state.settings.cals = Number($("setCals").value || state.settings.cals);
+  state.settings.protein = Number($("setProtein").value || state.settings.protein);
+  state.settings.weighDay = Number($("setWeighDay").value || state.settings.weighDay);
+  saveState();
+  toast("Saved ✓");
+  render();
+});
+
+$("btnReset").addEventListener("click", () => {
+  openModal(
+    "Reset all data?",
+    `<div class="listItem"><div class="listTitle">This will erase everything in the app.</div><div class="listSub">Your repo stays fine. This is only local app data.</div></div>`,
+    `<button class="btn" id="mCancel">Cancel</button><button class="btn danger" id="mReset">Reset</button>`
+  );
+  $("mCancel").onclick = closeModal;
+  $("mReset").onclick = () => {
+    state = defaultState();
+    saveState();
+    closeModal();
+    toast("Reset");
+    render();
+  };
+});
+
+$("btnExport").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type:"application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `glen-track-export-${todayKey()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+function openWeighInModal() {
+  const wkStart = startOfWeekKey(selectedDay, false);
+  const existing = state.weighIns.find(w => w.dayKey === wkStart);
+  openModal(
+    "Weekly weigh-in",
+    `
+      <div class="list">
+        <div class="listItem">
+          <div class="listTop">
+            <div class="listTitle">Week of ${formatShort(wkStart)}</div>
+          </div>
+          <div class="listSub">One point per week. Update anytime.</div>
+        </div>
+
+        <div class="listItem">
+          <div class="inlineFields">
+            <div class="listTitle">Weight</div>
+            <input id="wVal" type="number" inputmode="decimal" placeholder="e.g., 195.2" value="${existing?.weight ?? ""}" />
+          </div>
+          <div class="listSub">Stored to Stats automatically</div>
+        </div>
+      </div>
+    `,
+    `<button class="btn" id="mCancel">Cancel</button><button class="btn primary" id="mSave">Save</button>`
+  );
+  $("mCancel").onclick = closeModal;
+  $("mSave").onclick = () => {
+    const val = Number($("wVal").value || 0);
+    if (!val) { toast("Enter weight"); return; }
+    if (existing) existing.weight = val;
+    else state.weighIns.unshift({ id: cryptoId(), dayKey: wkStart, weight: val });
+    saveState();
+    closeModal();
+    toast("Weigh-in saved ✓");
+    render();
+  };
+}
+
+/* -------------------------
+   Rendering
+-------------------------- */
+function render() {
+  // top date label
+  $("uiDateLabel").textContent = (selectedDay === todayKey()) ? "Today" : formatShort(selectedDay);
+
+  // ensure day exists
+  const d = ensureDay(selectedDay);
+
+  // TODAY summary should reflect logged totals
+  const logged = foodTotals(selectedDay, "logged");
+  const targetCals = state.settings.cals;
+  const targetProtein = state.settings.protein;
+
+  const remainingCals = Math.max(0, targetCals - logged.cals);
+  const remainingProtein = Math.max(0, targetProtein - logged.p);
+
+  $("uiCals").textContent = `${logged.cals} / ${targetCals}`;
+  $("uiCalsHint").textContent = `${remainingCals} remaining`;
+  $("uiProtein").textContent = `${logged.p} / ${targetProtein}g`;
+  $("uiProteinHint").textContent = `${remainingProtein}g remaining`;
+  $("uiCarbs").textContent = `${logged.c}g`;
+  $("uiFat").textContent = `${logged.f}g`;
+
+  const foodLoggedCount = (d.food?.logged || []).length;
+  const woCompleted = !!d.workout?.completed;
+  $("uiFoodSub").textContent = foodLoggedCount ? `${foodLoggedCount} item(s)` : "Not logged";
+  $("uiWorkoutSub").textContent = woCompleted ? "Completed" : ((d.workout?.planned||[]).length ? "Planned" : "Not logged");
+
+  $("uiFoodMark").textContent = foodLoggedCount ? "✓" : "—";
+  $("uiWorkoutMark").textContent = woCompleted ? "✓" : "—";
+
+  // Close day enable + reopen
+  const canClose = foodLoggedCount > 0 || woCompleted;
+  $("btnCloseDay").disabled = !canClose || d.closed;
+  $("btnReopenDay").classList.toggle("hidden", !d.closed);
+
+  if (d.closed) {
+    $("uiStatusPill").textContent = "Closed";
+    $("uiStatusLine").textContent = "Status: Closed";
+    $("uiStatusPill").style.borderColor = "rgba(183,255,74,.35)";
+  } else {
+    $("uiStatusPill").textContent = "In Progress";
+    $("uiStatusLine").textContent = "Status: In Progress";
+    $("uiStatusPill").style.borderColor = "rgba(255,255,255,.10)";
+  }
+  $("uiCloseHint").textContent = d.closed ? "Day is closed. You can reopen if it was a mistake." : (canClose ? "Ready when you are." : "Log food or a workout to enable Close Today.");
+
+  // weigh-in line
+  const wkStart = startOfWeekKey(selectedDay, false);
+  const wi = state.weighIns.find(w => w.dayKey === wkStart);
+  $("uiWeighInSub").textContent = wi ? `${wi.weight}` : "Weekly only";
+  $("uiWeighInMark").textContent = wi ? "✓" : "—";
+
+  // FOOD screen
+  $("uiFoodDateSub").textContent = (selectedDay === todayKey()) ? "Meals for Today" : `Meals for ${formatShort(selectedDay)}`;
+  $("uiFoodTotCals").textContent = logged.cals;
+  $("uiFoodTotP").textContent = logged.p;
+  $("uiFoodTotC").textContent = logged.c;
+  $("uiFoodTotF").textContent = logged.f;
+
+  renderMealList();
+
+  // WORKOUTS screen
+  $("uiWorkoutDateSub").textContent = (selectedDay === todayKey()) ? "Plan or log for Today" : `Plan or log for ${formatShort(selectedDay)}`;
+  renderWorkoutScreen();
+
+  // Calendar + analytics
+  renderCalendar();
+  renderAnalytics();
+}
+
+function renderMealList() {
+  const d = ensureDay(selectedDay);
+  const logged = d.food?.logged || [];
+  const planned = d.food?.planned || [];
+
+  const section = (title, arr, mode) => `
+    <div class="card">
+      <div class="cardHead">
+        <div>
+          <div class="h2">${title}</div>
+          <div class="sub">${arr.length ? `${arr.length} item(s)` : "None"}</div>
+        </div>
+        <button class="btn" data-addfood="${mode}">Add</button>
+      </div>
+      <div class="divider"></div>
+      <div class="list">
+        ${arr.map(it => `
+          <div class="listItem">
+            <div class="listTop">
+              <div class="listTitle">${escapeHtml(it.name)} ${it.unit ? `<span style="color:#7E8AA3;font-weight:900">(${escapeHtml(it.unit)})</span>`:""}</div>
+              <button class="btn danger ghost" data-delfood="${mode}||${it.id}">Delete</button>
+            </div>
+            <div class="listSub">${it.cals} cals • P ${it.p} • C ${it.c} • F ${it.f}</div>
+          </div>
+        `).join("") || `<div class="listItem"><div class="listTitle">None</div></div>`}
+      </div>
+    </div>
+  `;
+
+  $("mealList").innerHTML =
+    section("Logged", logged, "logged") +
+    section("Planned", planned, "planned");
+
+  qsa("[data-addfood]").forEach(b => {
+    b.onclick = () => openFoodAddModal({ mode: b.getAttribute("data-addfood") });
+  });
+
+  qsa("[data-delfood]").forEach(b => {
+    b.onclick = () => {
+      const [mode, id] = b.getAttribute("data-delfood").split("||");
+      const d = ensureDay(selectedDay);
+      d.food[mode] = (d.food[mode] || []).filter(x => x.id !== id);
+      saveState();
+      toast("Deleted");
+      render();
+    };
+  });
+}
+
+function renderWorkoutScreen() {
+  const d = ensureDay(selectedDay);
+  const w = d.workout || { planned: [], completed:false, name:"" };
+  const hasPlan = (w.planned || []).length > 0;
+
+  $("uiWorkoutStatus").textContent = w.completed ? "Completed ✓" : (hasPlan ? "Planned" : "No workout planned");
+
+  // show editor if there is a plan
+  $("workoutEditor").classList.toggle("hidden", !hasPlan);
+
+  if (hasPlan) renderWorkoutEditor();
+
+  // history list with delete
+  const items = state.workoutHistory.slice(0, 14).map(h => `
+    <div class="listItem">
+      <div class="listTop">
+        <div class="listTitle">${escapeHtml(h.name || "Workout")}</div>
+        <button class="btn danger ghost" data-delhist="${h.id}">Delete</button>
+      </div>
+      <div class="listSub">${formatShort(h.dayKey)} • ${h.exercises.length} exercise(s)</div>
+    </div>
+  `).join("");
+
+  $("workoutHistory").innerHTML = items || `<div class="listItem"><div class="listTitle">No history yet</div><div class="listSub">Mark a workout complete to see it here.</div></div>`;
+
+  qsa("[data-delhist]").forEach(b => {
+    b.onclick = () => {
+      const id = b.getAttribute("data-delhist");
+      state.workoutHistory = state.workoutHistory.filter(x => x.id !== id);
+      saveState();
+      toast("Deleted");
+      render();
+    };
+  });
+}
+
+function renderAnalytics() {
+  // week summary based on selected day week
+  const wkStart = startOfWeekKey(selectedDay, false);
+  const wkEnd = addDays(wkStart, 6);
+  $("uiAnalyticsWeek").textContent = `${formatShort(wkStart)} – ${formatShort(wkEnd)}`;
+
+  // compute week stats
+  let closed = 0, workouts = 0, sumCals = 0, sumP = 0, daysWithFood = 0;
+  for (let i=0;i<7;i++) {
+    const key = addDays(wkStart, i);
+    const d = ensureDay(key);
+    if (d.closed) closed++;
+    if (d.workout?.completed) workouts++;
+    const t = foodTotals(key, "logged");
+    if ((d.food?.logged||[]).length) {
+      daysWithFood++;
+      sumCals += t.cals;
+      sumP += t.p;
     }
-    $("uiStreak").textContent = String(streak);
   }
+  const avgCals = daysWithFood ? Math.round(sumCals / daysWithFood) : 0;
+  const avgP = daysWithFood ? Math.round(sumP / daysWithFood) : 0;
 
-  // ---------- Tiny escaping helpers ----------
-  function escapeHTML(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-    }[c]));
-  }
-  function escapeAttr(s) {
-    return escapeHTML(s).replace(/"/g,"&quot;");
-  }
+  $("anClosed").textContent = closed;
+  $("anWorkouts").textContent = workouts;
+  $("anAvgCals").textContent = avgCals || "—";
+  $("anAvgProtein").textContent = avgP || "—";
 
-  // ---------- Start ----------
-  renderAll();
-})();
+  // mirror on Today card
+  $("uiClosedDays").textContent = closed;
+  $("uiWorkoutsWeek").textContent = workouts;
+  $("uiAvgCals").textContent = avgCals || "—";
+  $("uiAvgProtein").textContent = avgP || "—";
+
+  // streak (consecutive closed days ending today)
+  let streak = 0;
+  let k = todayKey();
+  while (true) {
+    const d = ensureDay(k);
+    if (!d.closed) break;
+    streak++;
+    k = addDays(k, -1);
+  }
+  $("uiStreak").textContent = String(streak);
+
+  // weigh-in list
+  const rows = state.weighIns
+    .slice()
+    .sort((a,b) => (a.dayKey < b.dayKey ? 1 : -1))
+    .slice(0, 12)
+    .map(w => `
+      <div class="listItem">
+        <div class="listTop">
+          <div class="listTitle">${w.weight}</div>
+          <button class="btn danger ghost" data-delw="${w.id}">Delete</button>
+        </div>
+        <div class="listSub">Week of ${formatShort(w.dayKey)}</div>
+      </div>
+    `).join("");
+
+  $("weighInList").innerHTML = rows || `<div class="listItem"><div class="listTitle">No weigh-ins yet</div><div class="listSub">Log one from Today or Stats.</div></div>`;
+
+  qsa("[data-delw]").forEach(b => {
+    b.onclick = () => {
+      const id = b.getAttribute("data-delw");
+      state.weighIns = state.weighIns.filter(x => x.id !== id);
+      saveState();
+      toast("Deleted");
+      render();
+    };
+  });
+
+  // settings fields
+  $("setCals").value = state.settings.cals;
+  $("setProtein").value = state.settings.protein;
+  $("setWeighDay").value = String(state.settings.weighDay);
+}
+
+/* -------------------------
+   helpers
+-------------------------- */
+function escapeHtml(str="") {
+  return String(str).replace(/[&<>"']/g, (m) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[m]));
+}
+function escapeAttr(str="") {
+  return escapeHtml(str).replace(/"/g, "&quot;");
+}
+
+/* -------------------------
+   Init
+-------------------------- */
+render();
+setScreen("today");
