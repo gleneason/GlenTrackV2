@@ -7,20 +7,21 @@
 
   <!-- PWA -->
   <meta name="theme-color" content="#0B1220" />
-  <link rel="manifest" href="manifest.json" />
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026" />
+  <link rel="manifest" href="./manifest.json?v=3" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png?v=3" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Glen Track" />
 
-  <link rel="stylesheet" href="app.css" />
-  <script defer src="app.js"></script>
+  <!-- Styles / App (cache-busted) -->
+  <link rel="stylesheet" href="./app.css?v=3" />
+  <script defer src="./app.js?v=3"></script>
 </head>
 
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="brandIcon" src="icon-192.png" alt="Glen Track icon" />
+      <img class="brandIcon" src="./icon-192.png?v=3" alt="Glen Track icon" />
       <div class="brandText">
         <div class="brandName">Glen Track</div>
         <div class="brandTag">Clean execution. Close the day.</div>
@@ -87,7 +88,7 @@
           <button class="rowBtn" id="btnWeighIn">
             <span class="rowLeft">
               <span class="rowTitle">Weekly weigh-in</span>
-              <span class="rowSub" id="uiWeighInSub">—</span>
+              <span class="rowSub" id="uiWeighInSub">Weekly only</span>
             </span>
             <span class="rowRight" id="uiWeighInMark">—</span>
           </button>
@@ -328,7 +329,7 @@
         </div>
 
         <div class="row">
-          <button class="btn" id="btnSaveSettings">Save</button>
+          <button class="btn primary" id="btnSaveSettings">Save</button>
         </div>
       </div>
     </section>
@@ -338,29 +339,24 @@
   <nav class="bottomNav" aria-label="Bottom navigation">
     <div class="bottomNavInner">
       <button class="navItem active" data-nav="today" aria-label="Today">
-        <span class="navIcon">▦</span>
-        <span class="navLabel">Today</span>
+        <span class="navIcon">▦</span><span class="navLabel">Today</span>
       </button>
       <button class="navItem" data-nav="food" aria-label="Food">
-        <span class="navIcon">⌁</span>
-        <span class="navLabel">Food</span>
+        <span class="navIcon">⌁</span><span class="navLabel">Food</span>
       </button>
       <button class="navItem" data-nav="workouts" aria-label="Workouts">
-        <span class="navIcon">⟡</span>
-        <span class="navLabel">Workouts</span>
+        <span class="navIcon">⟡</span><span class="navLabel">Workouts</span>
       </button>
       <button class="navItem" data-nav="calendar" aria-label="Calendar">
-        <span class="navIcon">▣</span>
-        <span class="navLabel">Calendar</span>
+        <span class="navIcon">▣</span><span class="navLabel">Calendar</span>
       </button>
       <button class="navItem" data-nav="analytics" aria-label="Analytics">
-        <span class="navIcon">≋</span>
-        <span class="navLabel">Stats</span>
+        <span class="navIcon">≋</span><span class="navLabel">Stats</span>
       </button>
     </div>
   </nav>
 
-  <!-- Modal -->
+  <!-- Modal (starts hidden) -->
   <div class="modalOverlay hidden" id="modalOverlay" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modalHead">
