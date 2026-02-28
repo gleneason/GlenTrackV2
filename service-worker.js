@@ -1,5 +1,5 @@
 /* Glen Track V2 - Offline first */
-const CACHE_NAME = "glen-track-v2-001";
+const CACHE_NAME = "glen-track-v2-002";
 const ASSETS = [
   "./",
   "./index.html",
