@@ -2,26 +2,44 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
   <title>Glen Track</title>
 
   <meta name="theme-color" content="#0B1220" />
   <link rel="manifest" href="./manifest.json" />
-  <link rel="apple-touch-icon" href="./icon-192.png?v=3" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Glen Track" />
 
-  <link rel="stylesheet" href="./app.css" />
-  <script defer src="./app.js"></script>
+  <!-- Cache-busters: change v= anytime you update -->
+  <link rel="stylesheet" href="./app.css?v=20260301" />
+  <script defer src="./app.js?v=20260301"></script>
 </head>
 
 <body>
+  <!-- Toast -->
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <!-- ===== HEADER ===== -->
+  <!-- Modal -->
+  <div id="modalOverlay" class="modalOverlay hidden" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modalHead">
+        <div id="modalTitle" class="modalTitle">Modal</div>
+        <button id="modalClose" class="iconBtn" aria-label="Close">✕</button>
+      </div>
+      <div id="modalBody" class="modalBody"></div>
+      <div id="modalFoot" class="modalFoot"></div>
+    </div>
+  </div>
+
+  <!-- ===== Top Bar ===== -->
   <header class="topbar">
     <div class="brand">
-      <img class="brandIcon" src="./icon-192.png" alt="Glen Track icon" />
+      <img class="brandIcon" src="./icon-192.png" alt="GT" />
       <div class="brandText">
         <div class="brandName">Glen Track</div>
         <div class="brandTag">Clean execution. Close the day.</div>
@@ -29,214 +47,221 @@
     </div>
 
     <div class="topActions">
-      <button class="chip" id="btnPrevDay">‹</button>
+      <button class="chip" id="btnPrevDay" aria-label="Previous day">‹</button>
       <button class="chip chipWide" id="btnPickDay">
         <span id="uiDateLabel">Today</span>
       </button>
-      <button class="chip" id="btnNextDay">›</button>
+      <button class="chip" id="btnNextDay" aria-label="Next day">›</button>
     </div>
   </header>
 
-  <!-- ===== MAIN ===== -->
-  <main class="container">
-
-    <!-- ================= TODAY ================= -->
+  <!-- ===== Main ===== -->
+  <main class="app">
+    <!-- TODAY -->
     <section class="screen active" data-screen="today">
-
       <div class="card heroCard">
-
         <div class="heroHead">
           <div>
-            <div class="h1">Today</div>
-            <div class="sub" id="uiStatusLine">Status: In Progress</div>
+            <div class="heroTitle">Today</div>
+            <div id="uiStatusLine" class="subtle">Status: In Progress</div>
           </div>
-          <div class="statusPill" id="uiStatusPill">In Progress</div>
+          <div id="uiStatusPill" class="statusPill">In Progress</div>
         </div>
 
-        <!-- CAL + PROTEIN RINGS -->
-        <div class="ringRow">
-          <div id="calRingHost"></div>
-          <div id="proteinRingHost"></div>
+        <!-- Rings row: Calories + Protein (no percent text) -->
+        <div class="ringsRow" id="macroRingsRow">
+          <!-- injected by JS -->
+        </div>
+
+        <div class="miniRow">
+          <button class="miniBtn" id="btnGoFood">
+            <div class="miniK">Food</div>
+            <div id="uiFoodSub" class="miniV">Not logged</div>
+          </button>
+          <button class="miniBtn" id="btnGoWorkouts">
+            <div class="miniK">Workout</div>
+            <div id="uiWorkoutSub" class="miniV">Not logged</div>
+          </button>
+          <button class="miniBtn" id="btnQuickLog">
+            <div class="miniK">Quick</div>
+            <div class="miniV">Log</div>
+          </button>
         </div>
 
         <div class="divider"></div>
 
-        <!-- FOOD + WORKOUT SHORTCUTS -->
-        <div class="rowList">
-
-          <button class="rowBtn" id="btnGoFood">
-            <span class="rowLeft">
-              <span class="rowTitle">Food</span>
-              <span class="rowSub" id="uiFoodSub">Not logged</span>
-            </span>
-            <span class="rowRight" id="uiFoodMark">—</span>
-          </button>
-
-          <button class="rowBtn" id="btnGoWorkouts">
-            <span class="rowLeft">
-              <span class="rowTitle">Workout</span>
-              <span class="rowSub" id="uiWorkoutSub">Not logged</span>
-            </span>
-            <span class="rowRight" id="uiWorkoutMark">—</span>
-          </button>
-
+        <div class="row spaceBetween">
+          <div class="subtle" id="uiCloseHint">Log food or a workout to enable Close Today.</div>
+          <button class="btn primary" id="btnCloseDay">Close Today</button>
         </div>
-
-        <div class="divider"></div>
-
-        <div class="ctaRow">
-          <button class="btn ghost" id="btnQuickLog">Quick Log</button>
-          <button class="btn primary" id="btnCloseDay" disabled>
-            Close Today
-          </button>
-        </div>
-
-        <div class="subtle" id="uiCloseHint">
-          Log food or a workout to enable Close Today.
-        </div>
-
-      </div>
-    </section>
-
-    <!-- ================= FOOD ================= -->
-    <section class="screen" data-screen="food">
-
-      <div class="screenHead">
-        <div>
-          <div class="h1">Food</div>
-          <div class="sub" id="uiFoodDateSub">Meals for selected day</div>
-        </div>
-        <button class="btn ghost" id="btnAddFoodLogged">Add</button>
       </div>
 
       <div class="card">
-        <div class="miniRow">
-          <div class="miniItem">
-            <span class="miniK">Calories</span>
-            <span class="miniV" id="uiFoodTotCals">—</span>
+        <div class="cardHead">
+          <div>
+            <div class="h2">Week Snapshot</div>
+            <div class="subtle">Signals (clean, not noisy)</div>
           </div>
-          <div class="miniItem">
-            <span class="miniK">Protein</span>
-            <span class="miniV" id="uiFoodTotP">—</span>
+        </div>
+
+        <div class="statGrid">
+          <div class="statBox"><div class="statK">Closed</div><div id="uiClosedDays" class="statV">0/7</div></div>
+          <div class="statBox"><div class="statK">Workouts</div><div id="uiWorkoutsWeek" class="statV">0</div></div>
+          <div class="statBox"><div class="statK">Avg Cals</div><div id="uiAvgCals" class="statV">—</div></div>
+          <div class="statBox"><div class="statK">Avg Protein</div><div id="uiAvgProtein" class="statV">—</div></div>
+          <div class="statBox"><div class="statK">Streak</div><div id="uiStreak" class="statV">0</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOD -->
+    <section class="screen" data-screen="food">
+      <div class="card">
+        <div class="cardHead">
+          <div>
+            <div class="h2">Food</div>
+            <div id="uiFoodDateSub" class="subtle">Meals for Today</div>
           </div>
-          <div class="miniItem">
-            <span class="miniK">Carbs</span>
-            <span class="miniV" id="uiFoodTotC">—</span>
+          <div class="row" style="gap:10px;">
+            <button class="btn ghost" id="btnCopyPrevDay">Copy yesterday</button>
+            <button class="btn" id="btnFoodLibrary">Library</button>
           </div>
-          <div class="miniItem">
-            <span class="miniK">Fat</span>
-            <span class="miniV" id="uiFoodTotF">—</span>
-          </div>
+        </div>
+
+        <div class="totalsRow">
+          <div class="pill">Calories <strong id="uiFoodTotCals">0</strong></div>
+          <div class="pill">Protein <strong id="uiFoodTotP">0</strong></div>
+          <div class="pill">Carbs <strong id="uiFoodTotC">0</strong></div>
+          <div class="pill">Fat <strong id="uiFoodTotF">0</strong></div>
         </div>
       </div>
 
       <div id="mealList"></div>
-
     </section>
 
-    <!-- ================= WORKOUTS ================= -->
+    <!-- WORKOUTS -->
     <section class="screen" data-screen="workouts">
-
-      <div class="screenHead">
-        <div>
-          <div class="h1">Workouts</div>
-          <div class="sub" id="uiWorkoutDateSub">
-            Plan or log for selected day
-          </div>
-        </div>
-        <button class="btn ghost" id="btnPlanWorkout">Plan</button>
-      </div>
-
       <div class="card">
-
-        <div id="workoutEditor" class="hidden">
-
-          <div class="row" style="justify-content:space-between; gap:10px;">
-            <button class="btn ghost" id="btnAddExercise">
-              Add exercise
-            </button>
-
-            <button class="btn ghost" id="btnMarkWorkoutComplete">
-              Mark Complete
-            </button>
-
-            <button class="btn primary" id="btnSaveWorkoutLog">
-              Save
-            </button>
+        <div class="cardHead">
+          <div>
+            <div class="h2">Workouts</div>
+            <div id="uiWorkoutDateSub" class="subtle">Plan or log for Today</div>
           </div>
-
-          <div class="divider"></div>
-
-          <div id="exerciseEditor"></div>
-
+          <div class="row" style="gap:10px;">
+            <button class="btn" id="btnTemplates">Templates</button>
+            <button class="btn primary" id="btnPlanWorkout">Plan</button>
+          </div>
         </div>
 
-        <div id="uiWorkoutEmpty" class="subtle">
-          No workout planned.
+        <div class="row spaceBetween">
+          <div class="subtle">Status:</div>
+          <div id="uiWorkoutStatus" class="pill">No workout planned</div>
         </div>
 
+        <div class="divider"></div>
+
+        <div class="row" style="gap:10px; flex-wrap:wrap;">
+          <button class="btn" id="btnAddExercise">Add exercise</button>
+          <button class="btn primary" id="btnMarkWorkoutComplete">Mark Complete</button>
+          <button class="btn ghost" id="btnSaveWorkoutLog">Save</button>
+        </div>
+
+        <div id="workoutEditor" class="hidden"></div>
+        <div id="exerciseEditor"></div>
+
+        <div class="divider"></div>
+        <div class="h2">History</div>
+        <div id="workoutHistory" class="list"></div>
       </div>
     </section>
 
-    <!-- ================= CALENDAR ================= -->
+    <!-- CALENDAR -->
     <section class="screen" data-screen="calendar">
-
-      <div class="screenHead">
-        <div class="h1">Calendar</div>
-        <div class="row" style="gap:10px;">
-          <button class="chip" id="btnPrevMonth">‹</button>
-          <button class="chip chipWide" id="btnTodayJump">Today</button>
-          <button class="chip" id="btnNextMonth">›</button>
-        </div>
-      </div>
-
-      <!-- FLAT GRID (NO BUBBLES) -->
-      <div id="calendarGrid" class="calGrid"></div>
-
-    </section>
-
-    <!-- ================= STATS ================= -->
-    <section class="screen" data-screen="stats">
-
-      <div class="screenHead">
-        <div>
-          <div class="h1">Stats</div>
-          <div class="sub">Momentum overview</div>
-        </div>
-      </div>
-
       <div class="card">
-        <div id="statsContent"></div>
+        <div class="cardHead">
+          <div class="row" style="gap:10px; align-items:center;">
+            <button class="iconBtn" id="btnCalPrev" aria-label="Previous month">‹</button>
+            <div id="uiCalTitle" class="h2" style="margin:0;">Month</div>
+            <button class="iconBtn" id="btnCalNext" aria-label="Next month">›</button>
+          </div>
+          <div class="subtle">Tap a day to preview. No bubbles, no heavy borders.</div>
+        </div>
+
+        <div class="calWeekHead">
+          <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+        </div>
+        <div id="calGrid" class="calGrid"></div>
       </div>
 
+      <!-- Preview card injected by JS -->
     </section>
 
+    <!-- STATS -->
+    <section class="screen" data-screen="analytics">
+      <div class="card">
+        <div class="cardHead">
+          <div>
+            <div class="h2">Stats</div>
+            <div id="uiAnalyticsWeek" class="subtle">Week</div>
+          </div>
+          <button class="btn ghost" id="btnLogWeighIn">Log weigh-in</button>
+        </div>
+
+        <div class="statGrid">
+          <div class="statBox"><div class="statK">Closed days</div><div id="anClosed" class="statV">0</div></div>
+          <div class="statBox"><div class="statK">Workouts</div><div id="anWorkouts" class="statV">0</div></div>
+          <div class="statBox"><div class="statK">Avg calories</div><div id="anAvgCals" class="statV">—</div></div>
+          <div class="statBox"><div class="statK">Avg protein</div><div id="anAvgProtein" class="statV">—</div></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="h2">Weigh-ins</div>
+        <div id="weighInList" class="list"></div>
+
+        <div class="divider"></div>
+
+        <div class="h2">Settings</div>
+        <div class="formGrid">
+          <label class="field">
+            <span>Calorie target</span>
+            <input id="setCals" type="number" inputmode="numeric" value="2200" />
+          </label>
+          <label class="field">
+            <span>Protein target (g)</span>
+            <input id="setProtein" type="number" inputmode="numeric" value="190" />
+          </label>
+          <label class="field">
+            <span>Weigh-in day (0=Sun … 6=Sat)</span>
+            <input id="setWeighDay" type="number" inputmode="numeric" value="1" />
+          </label>
+        </div>
+
+        <div class="row spaceBetween" style="margin-top:12px;">
+          <button class="btn danger ghost" id="btnReset">Reset data</button>
+          <button class="btn primary" id="btnSaveSettings">Save</button>
+        </div>
+      </div>
+    </section>
   </main>
 
-  <!-- ===== BOTTOM NAV ===== -->
-  <nav class="bottomNav">
-
-    <button class="navBtn active" data-nav="today">
-      <span>Today</span>
+  <!-- ===== Bottom Nav ===== -->
+  <nav class="bottomNav" role="navigation" aria-label="Bottom navigation">
+    <button class="navItem active" data-nav="today">
+      <span class="navIcon">▦</span><span class="navLbl">Today</span>
     </button>
-
-    <button class="navBtn" data-nav="food">
-      <span>Food</span>
+    <button class="navItem" data-nav="food">
+      <span class="navIcon">🍽</span><span class="navLbl">Food</span>
     </button>
-
-    <button class="navBtn" data-nav="workouts">
-      <span>Workouts</span>
+    <button class="navItem" data-nav="workouts">
+      <span class="navIcon">🏋️</span><span class="navLbl">Workouts</span>
     </button>
-
-    <button class="navBtn" data-nav="calendar">
-      <span>Calendar</span>
+    <button class="navItem" data-nav="calendar">
+      <span class="navIcon">▢</span><span class="navLbl">Calendar</span>
     </button>
-
-    <button class="navBtn" data-nav="stats">
-      <span>Stats</span>
+    <button class="navItem" data-nav="analytics">
+      <span class="navIcon">▤</span><span class="navLbl">Stats</span>
     </button>
-
   </nav>
-
 </body>
 </html>
