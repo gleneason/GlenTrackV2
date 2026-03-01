@@ -191,10 +191,9 @@ body{
 .miniV{ font-weight:900; margin-top:4px; }
 
 /* Rings */
-.ringsRow{
-  display:flex;
-  gap:12px;
-  margin-top: 12px;
+.ringCard{
+  flex: 1 1 260px; /* allows wrap */
+  min-width: 0;    /* prevents overflow clipping */
 }
 .ringCard{
   flex:1;
