@@ -1,6 +1,5 @@
 /* Glen Track V2 - app.js (single-file vanilla JS)
-   Works with the index.html you pasted (IDs must match).
-   Data stored in localStorage (offline-first).
+   Safari-safe (no replaceAll). Offline-first localStorage.
 */
 
 (() => {
@@ -18,11 +17,8 @@
    ********************/
   const LS_KEY = "glenTrackV2:data:v1";
   const LS_UI  = "glenTrackV2:ui:v1";
-
-  // Top 10 favorites in Food Library
   const MAX_FAVS = 10;
 
-  // Momentum formula weights (tweak anytime)
   const MOMENTUM = {
     foodLogged: 0.45,
     workoutDone: 0.45,
@@ -30,44 +26,47 @@
   };
 
   /********************
+   * Safari-safe string escape (no replaceAll)
+   ********************/
+  function escapeHTML(s) {
+    const str = String(s == null ? "" : s);
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+  function escapeAttr(s) {
+    return escapeHTML(s).replace(/\n/g, " ");
+  }
+
+  /********************
+   * uid
+   ********************/
+  function uid() {
+    return Math.random().toString(16).slice(2) + Date.now().toString(16);
+  }
+
+  /********************
    * Date helpers
    ********************/
   const pad2 = (n) => String(n).padStart(2, "0");
 
   function toKey(d) {
-    // local date key YYYY-MM-DD
     const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
   }
-
   function fromKey(key) {
-    const [y, m, d] = key.split("-").map(Number);
-    return new Date(y, m - 1, d);
+    const parts = String(key || "").split("-").map(Number);
+    const y = parts[0], m = parts[1], d = parts[2];
+    return new Date(y, (m || 1) - 1, d || 1);
   }
-
   function addDays(key, delta) {
     const d = fromKey(key);
     d.setDate(d.getDate() + delta);
     return toKey(d);
   }
-
-  function isSameWeek(d1, d2, weekStartsOnMonday = true) {
-    const a = new Date(d1.getFullYear(), d1.getMonth(), d1.getDate());
-    const b = new Date(d2.getFullYear(), d2.getMonth(), d2.getDate());
-
-    const dayA = a.getDay();
-    const dayB = b.getDay();
-
-    const offset = weekStartsOnMonday ? 1 : 0;
-
-    const startA = new Date(a);
-    startA.setDate(a.getDate() - ((dayA - offset + 7) % 7));
-    const startB = new Date(b);
-    startB.setDate(b.getDate() - ((dayB - offset + 7) % 7));
-
-    return toKey(startA) === toKey(startB);
-  }
-
   function weekRangeFor(dateKey, weekStartsOnMonday = true) {
     const d = fromKey(dateKey);
     const day = d.getDay();
@@ -80,7 +79,6 @@
 
     return { startKey: toKey(start), endKey: toKey(end), start, end };
   }
-
   function monthTitle(d) {
     return d.toLocaleString(undefined, { month: "long", year: "numeric" });
   }
@@ -89,7 +87,6 @@
    * Default libraries
    ********************/
   const DEFAULT_FOOD_LIBRARY = [
-    // name, calories, protein, carbs, fat, defaultUnit, defaultAmount
     { id: uid(), name: "Greek yogurt", cals: 150, p: 20, c: 8, f: 2, unit: "cup", amount: 1 },
     { id: uid(), name: "Banana", cals: 105, p: 1, c: 27, f: 0, unit: "medium", amount: 1 },
     { id: uid(), name: "Rotisserie chicken", cals: 200, p: 35, c: 0, f: 6, unit: "4 oz", amount: 1 },
@@ -110,45 +107,25 @@
     { key: "Cardio", items: ["Treadmill", "Bike", "Rowing machine", "Stair climber"] },
   ];
 
-  const DEFAULT_TEMPLATES = [
-    {
-      id: uid(),
-      name: "Full Body A",
-      exercises: [
-        ex("Squat", "Legs"),
-        ex("Bench press", "Chest"),
-        ex("Seated row", "Back"),
-        ex("Overhead press", "Shoulders"),
-      ],
-    },
-    {
-      id: uid(),
-      name: "Full Body B",
-      exercises: [
-        ex("Deadlift", "Back"),
-        ex("Incline bench", "Chest"),
-        ex("Lat pulldown", "Back"),
-        ex("Dumbbell curls", "Biceps"),
-      ],
-    },
-  ];
-
   function ex(name, group) {
     return {
       id: uid(),
       name,
       group,
-      // “one weight per exercise” (your preference)
-      weight: null,         // lbs (or kg if you prefer)
+      weight: null,   // one weight per exercise
       sets: 3,
       reps: 8,
       notes: "",
-      pr: { bestWeight: null, bestReps: null }, // PR tracking
     };
   }
 
+  const DEFAULT_TEMPLATES = [
+    { id: uid(), name: "Full Body A", exercises: [ex("Squat","Legs"), ex("Bench press","Chest"), ex("Seated row","Back"), ex("Overhead press","Shoulders")] },
+    { id: uid(), name: "Full Body B", exercises: [ex("Deadlift","Back"), ex("Incline bench","Chest"), ex("Lat pulldown","Back"), ex("Dumbbell curls","Biceps")] },
+  ];
+
   /********************
-   * Data model (localStorage)
+   * Data model
    ********************/
   function defaultData() {
     return {
@@ -156,26 +133,17 @@
       settings: {
         calTarget: 2200,
         proteinTarget: 190,
-        themeColor: "#0B1220",   // matte navy
-        weighInDay: 1,           // Monday default
-        unitSystem: "lb",        // "lb" or "kg"
+        themeColor: "#0B1220",
+        weighInDay: 1,
+        unitSystem: "lb",
+        prs: {}
       },
       foodLibrary: DEFAULT_FOOD_LIBRARY,
-      favorites: [], // array of food ids (max 10)
+      favorites: [],
       templates: DEFAULT_TEMPLATES,
-      days: {
-        // [dateKey]: {
-        //   food: { logged: [entry], planned: [entry] },
-        //   workout: { planned: workoutPlan|null, completed: workoutLog|null },
-        //   closed: bool,
-        // }
-      },
-      weighIns: [
-        // { id, dateKey, weight }
-      ],
-      workoutHistory: [
-        // { id, dateKey, templateName, exercises, durationSec, completedAt }
-      ],
+      days: {},
+      weighIns: [],
+      workoutHistory: []
     };
   }
 
@@ -184,12 +152,14 @@
       const raw = localStorage.getItem(LS_KEY);
       if (!raw) return defaultData();
       const data = JSON.parse(raw);
-      // minimal migration guard
-      if (!data || typeof data !== "object") return defaultData();
-      if (!data.settings) data.settings = defaultData().settings;
+      const base = defaultData();
+
+      if (!data || typeof data !== "object") return base;
+      if (!data.settings) data.settings = base.settings;
+      if (!data.settings.prs) data.settings.prs = {};
       if (!data.days) data.days = {};
-      if (!data.foodLibrary) data.foodLibrary = DEFAULT_FOOD_LIBRARY;
-      if (!data.templates) data.templates = DEFAULT_TEMPLATES;
+      if (!data.foodLibrary) data.foodLibrary = base.foodLibrary;
+      if (!data.templates) data.templates = base.templates;
       if (!data.favorites) data.favorites = [];
       if (!data.workoutHistory) data.workoutHistory = [];
       if (!data.weighIns) data.weighIns = [];
@@ -212,7 +182,6 @@
       return {};
     }
   }
-
   function saveUI() {
     localStorage.setItem(LS_UI, JSON.stringify(UI));
   }
@@ -229,7 +198,7 @@
   }
 
   /********************
-   * App state
+   * State
    ********************/
   const DB = loadData();
   const UI = loadUI();
@@ -238,11 +207,7 @@
     screen: UI.screen || "today",
     dateKey: UI.dateKey || toKey(new Date()),
     calMonth: UI.calMonth ? fromKey(UI.calMonth) : new Date(),
-    restTimer: {
-      running: false,
-      remaining: 0,
-      interval: null,
-    },
+    restTimer: { running: false, remaining: 0, interval: null },
   };
 
   /********************
@@ -250,7 +215,7 @@
    ********************/
   function setThemeColor(hex) {
     DB.settings.themeColor = hex;
-    const meta = $('meta[name="theme-color"]');
+    const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute("content", hex);
     document.documentElement.style.setProperty("--theme", hex);
     saveData();
@@ -260,10 +225,10 @@
    * Toast
    ********************/
   let toastTimer = null;
-  function toast(msg = "Updated ✓") {
+  function toast(msg) {
     const el = $("#toast");
     if (!el) return;
-    el.textContent = msg;
+    el.textContent = msg || "Updated ✓";
     el.classList.remove("hidden");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add("hidden"), 1400);
@@ -272,30 +237,21 @@
   /********************
    * Modal
    ********************/
-  function openModal(title, bodyHTML, footHTML = "") {
+  function openModal(title, bodyHTML, footHTML) {
     const overlay = $("#modalOverlay");
-    const titleEl = $("#modalTitle");
-    const bodyEl = $("#modalBody");
-    const footEl = $("#modalFoot");
-    if (!overlay || !titleEl || !bodyEl || !footEl) return;
-
-    titleEl.textContent = title;
-    bodyEl.innerHTML = bodyHTML;
-    footEl.innerHTML = footHTML;
-
+    if (!overlay) return;
+    $("#modalTitle").textContent = title || "Modal";
+    $("#modalBody").innerHTML = bodyHTML || "";
+    $("#modalFoot").innerHTML = footHTML || "";
     overlay.classList.remove("hidden");
     overlay.setAttribute("aria-hidden", "false");
-
-    // ensure modal body can scroll
-    bodyEl.scrollTop = 0;
+    $("#modalBody").scrollTop = 0;
   }
-
   function closeModal() {
     const overlay = $("#modalOverlay");
     if (!overlay) return;
     overlay.classList.add("hidden");
     overlay.setAttribute("aria-hidden", "true");
-    // clear content
     $("#modalBody").innerHTML = "";
     $("#modalFoot").innerHTML = "";
   }
@@ -309,7 +265,7 @@
     saveUI();
 
     $$(".screen").forEach((s) => s.classList.remove("active"));
-    const target = $(`.screen[data-screen="${screen}"]`);
+    const target = document.querySelector(`.screen[data-screen="${screen}"]`);
     if (target) target.classList.add("active");
 
     $$(".navItem").forEach((b) => b.classList.toggle("active", b.dataset.nav === screen));
@@ -357,9 +313,8 @@
     const c = 2 * Math.PI * r;
     const dash = (p / 100) * c;
 
-    // Uses CSS vars so your theme stays consistent
     return `
-      <div class="momentumRing" aria-label="Momentum ${p}%">
+      <div class="momentumRing" aria-label="Progress ${p}%">
         <svg width="140" height="140" viewBox="0 0 140 140">
           <circle cx="70" cy="70" r="${r}" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="12" />
           <circle cx="70" cy="70" r="${r}" fill="none"
@@ -372,7 +327,7 @@
         </svg>
         <div class="momentumCenter">
           <div class="momentumPct">${p}%</div>
-          <div class="momentumLbl">Momentum</div>
+          <div class="momentumLbl">Progress</div>
         </div>
       </div>
     `;
@@ -393,14 +348,13 @@
       { cals: 0, p: 0, c: 0, f: 0 }
     );
   }
-
   function fmtMacro(n) {
     if (n == null) return "—";
     return Number.isFinite(n) ? String(Math.round(n)) : "—";
   }
 
   /********************
-   * Food entry + library
+   * Food library + entries
    ********************/
   function normalizeFoodItem(raw) {
     return {
@@ -416,25 +370,21 @@
   }
 
   function isFav(foodId) {
-    return DB.favorites.includes(foodId);
+    return DB.favorites.indexOf(foodId) >= 0;
   }
 
   function toggleFav(foodId) {
     const idx = DB.favorites.indexOf(foodId);
     if (idx >= 0) DB.favorites.splice(idx, 1);
     else {
-      if (DB.favorites.length >= MAX_FAVS) {
-        toast(`Favorites max = ${MAX_FAVS}`);
-        return;
-      }
+      if (DB.favorites.length >= MAX_FAVS) return toast(`Favorites max = ${MAX_FAVS}`);
       DB.favorites.unshift(foodId);
     }
     saveData();
-    renderFoodLibrary(); // if open
+    renderFoodLibrary($("#foodSearch") ? $("#foodSearch").value : "");
   }
 
-  function addFoodToDay(dateKey, bucket, foodItem, qty, unitLabel, grams = null) {
-    // qty = quantity multiplier for macros
+  function addFoodToDay(dateKey, bucket, foodItem, qty, unitLabel, grams) {
     const q = Number(qty || 1);
     const base = normalizeFoodItem(foodItem);
 
@@ -444,7 +394,7 @@
       name: base.name,
       qty: q,
       unit: unitLabel || base.unit || "serving",
-      grams: grams != null && grams !== "" ? Number(grams) : null,
+      grams: grams !== "" && grams != null ? Number(grams) : null,
       cals: Math.round(base.cals * q),
       p: Math.round(base.p * q),
       c: Math.round(base.c * q),
@@ -465,410 +415,17 @@
     toast("Deleted");
   }
 
-  /********************
-   * Workouts
-   ********************/
-  function ensureWorkoutPlan(dateKey) {
-    const day = getDay(dateKey);
-    if (!day.workout.planned) {
-      day.workout.planned = {
-        id: uid(),
-        templateId: null,
-        name: "Workout",
-        exercises: [],
-        createdAt: Date.now(),
-      };
-    }
-    return day.workout.planned;
-  }
-
-  function markWorkoutComplete(dateKey) {
-    const day = getDay(dateKey);
-    if (!day.workout.planned || day.workout.planned.exercises.length === 0) {
-      toast("Add exercises first");
-      return;
-    }
-    // convert planned -> completed
-    const completed = {
-      id: uid(),
-      dateKey,
-      templateName: day.workout.planned.name || "Workout",
-      exercises: day.workout.planned.exercises.map((e) => ({ ...e })),
-      durationSec: null,
-      completedAt: Date.now(),
-    };
-
-    day.workout.completed = completed;
-    DB.workoutHistory.unshift(completed);
-
-    // PR tracking update
-    completed.exercises.forEach((e) => updatePR(e.name, e.weight, e.reps));
-
-    saveData();
-    toast("Workout complete ✓");
-  }
-
-  function undoWorkoutComplete(dateKey) {
-    const day = getDay(dateKey);
-    if (!day.workout.completed) return;
-
-    const id = day.workout.completed.id;
-    DB.workoutHistory = DB.workoutHistory.filter((w) => w.id !== id);
-    day.workout.completed = null;
-    saveData();
-    toast("Workout un-completed");
-  }
-
-  function deleteWorkoutFromHistory(workoutId) {
-    DB.workoutHistory = DB.workoutHistory.filter((w) => w.id !== workoutId);
-    // also clear it from day if it matches
-    Object.keys(DB.days).forEach((k) => {
-      if (DB.days[k]?.workout?.completed?.id === workoutId) {
-        DB.days[k].workout.completed = null;
-      }
-    });
-    saveData();
-    toast("Deleted workout");
-    renderWorkouts();
-  }
-
-  // PR tracking stored in templates/exercises by name (simple + effective)
-  function updatePR(exerciseName, weight, reps) {
-    const w = Number(weight);
-    const r = Number(reps);
-    if (!exerciseName) return;
-    if (!Number.isFinite(w) && !Number.isFinite(r)) return;
-
-    // keep PRs in a hidden map in DB.settings (simple store)
-    if (!DB.settings.prs) DB.settings.prs = {};
-    const key = exerciseName.trim().toLowerCase();
-    const cur = DB.settings.prs[key] || { bestWeight: null, bestReps: null };
-
-    if (Number.isFinite(w)) {
-      if (cur.bestWeight == null || w > cur.bestWeight) cur.bestWeight = w;
-    }
-    if (Number.isFinite(r)) {
-      if (cur.bestReps == null || r > cur.bestReps) cur.bestReps = r;
-    }
-
-    DB.settings.prs[key] = cur;
-  }
-
-  function getPR(exerciseName) {
-    const key = String(exerciseName || "").trim().toLowerCase();
-    return (DB.settings.prs && DB.settings.prs[key]) || { bestWeight: null, bestReps: null };
-  }
-
-  /********************
-   * Rest timer
-   ********************/
-  function startRestTimer(seconds) {
-    const secs = Math.max(0, Number(seconds || 0));
-    if (!secs) return;
-
-    state.restTimer.running = true;
-    state.restTimer.remaining = secs;
-
-    clearInterval(state.restTimer.interval);
-    state.restTimer.interval = setInterval(() => {
-      state.restTimer.remaining -= 1;
-      renderRestTimerInline();
-      if (state.restTimer.remaining <= 0) {
-        clearInterval(state.restTimer.interval);
-        state.restTimer.running = false;
-        state.restTimer.remaining = 0;
-        renderRestTimerInline();
-        toast("Rest done ✓");
-        // little vibration if supported
-        if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
-      }
-    }, 1000);
-
-    renderRestTimerInline();
-  }
-
-  function stopRestTimer() {
-    clearInterval(state.restTimer.interval);
-    state.restTimer.running = false;
-    state.restTimer.remaining = 0;
-    renderRestTimerInline();
-  }
-
-  function renderRestTimerInline() {
-    const host = $("#workoutEditor");
-    if (!host || host.classList.contains("hidden")) return;
-    const el = $("#restTimerInline");
-    if (!el) return;
-
-    if (!state.restTimer.running) {
-      el.innerHTML = `<span class="subtle">Rest timer</span> <button class="btn ghost" id="btnStartRest">Start</button>`;
-      return;
-    }
-
-    const mm = Math.floor(state.restTimer.remaining / 60);
-    const ss = state.restTimer.remaining % 60;
-    el.innerHTML = `
-      <span class="subtle">Rest:</span>
-      <strong>${mm}:${pad2(ss)}</strong>
-      <button class="btn ghost" id="btnStopRest">Stop</button>
-    `;
-  }
-
-  /********************
-   * Close day (and undo)
-   ********************/
-  function canCloseDay(day) {
-    return day.food.logged.length > 0 || !!day.workout.completed;
-  }
-
-  function closeDay(dateKey) {
-    const day = getDay(dateKey);
-    if (!canCloseDay(day)) {
-      toast("Log food or a workout");
-      return;
-    }
-    day.closed = true;
-    saveData();
-    toast("Day closed ✓");
-  }
-
-  function uncloseDay(dateKey) {
-    const day = getDay(dateKey);
-    day.closed = false;
-    saveData();
-    toast("Day reopened");
-  }
-
-  /********************
-   * Calendar
-   ********************/
-  function setCalMonth(d) {
-    state.calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-    UI.calMonth = toKey(state.calMonth);
-    saveUI();
-    renderCalendar();
-  }
-
-  function buildCalendarGrid(monthDate) {
-    const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-    const startDay = first.getDay(); // 0=Sun
-
-    const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
-
-    const cells = [];
-    for (let i = 0; i < startDay; i++) cells.push(null);
-    for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), d));
-
-    return cells;
-  }
-
-  function daySignals(dateKey) {
-    const day = getDay(dateKey);
-    return {
-      closed: !!day.closed,
-      food: day.food.logged.length > 0,
-      workout: !!day.workout.completed,
-      planned: day.food.planned.length > 0 || !!day.workout.planned,
-    };
-  }
-
-  /********************
-   * Render: Today
-   ********************/
-  function renderToday() {
-    updateDateLabel();
-
-    const day = getDay(state.dateKey);
-    const calsTarget = Number(DB.settings.calTarget || 0);
-    const proteinTarget = Number(DB.settings.proteinTarget || 0);
-
-    const totals = sumMacros(day.food.logged);
-
-    // status pill
-    const status = day.closed ? "Closed" : "In Progress";
-    $("#uiStatusLine").textContent = `Status: ${status}`;
-    $("#uiStatusPill").textContent = status;
-
-    // Momentum ring
-    const momentum = computeMomentum(state.dateKey);
-
-    // Build today numbers with "x / goal" format
-    const uiCals = $("#uiCals");
-    const uiCalsHint = $("#uiCalsHint");
-    const uiProtein = $("#uiProtein");
-    const uiProteinHint = $("#uiProteinHint");
-    const uiCarbs = $("#uiCarbs");
-    const uiFat = $("#uiFat");
-
-    if (uiCals) uiCals.textContent = `${fmtMacro(totals.cals)} / ${fmtMacro(calsTarget)}`;
-    if (uiProtein) uiProtein.textContent = `${fmtMacro(totals.p)} / ${fmtMacro(proteinTarget)}g`;
-    if (uiCarbs) uiCarbs.textContent = `${fmtMacro(totals.c)}g`;
-    if (uiFat) uiFat.textContent = `${fmtMacro(totals.f)}g`;
-
-    if (uiCalsHint) uiCalsHint.textContent = `${Math.max(0, calsTarget - totals.cals)} remaining`;
-    if (uiProteinHint) uiProteinHint.textContent = `${Math.max(0, proteinTarget - totals.p)}g remaining`;
-
-    // Row subtitles
-    $("#uiFoodSub").textContent = day.food.logged.length ? `${day.food.logged.length} item(s)` : "Not logged";
-    $("#uiWorkoutSub").textContent = day.workout.completed ? "Completed" : (day.workout.planned ? "Planned" : "Not logged");
-
-    $("#uiFoodMark").textContent = day.food.logged.length ? "✓" : "—";
-    $("#uiWorkoutMark").textContent = day.workout.completed ? "✓" : "—";
-
-    const weighDay = Number(DB.settings.weighInDay);
-    const d = fromKey(state.dateKey);
-    const isWeighDay = d.getDay() === weighDay;
-    $("#uiWeighInSub").textContent = isWeighDay ? "Today" : "Weekly only";
-    $("#uiWeighInMark").textContent = "—";
-
-    // Close day button
-    const closeBtn = $("#btnCloseDay");
-    const hint = $("#uiCloseHint");
-    const canClose = canCloseDay(day);
-    if (closeBtn) closeBtn.disabled = !canClose || day.closed;
-    if (hint) {
-      hint.textContent = day.closed
-        ? "Day is closed. You can reopen it from Quick Log."
-        : (canClose ? "Ready to close when you are." : "Log food or a workout to enable Close Today.");
-    }
-
-    // Inject Momentum ring into Today card (replaces the old “momentum word” problem)
-    // We insert it just under the status area if not already present.
-    const heroCard = $(".heroCard");
-    if (heroCard) {
-      let ringHost = $("#momentumHost");
-      if (!ringHost) {
-        ringHost = document.createElement("div");
-        ringHost.id = "momentumHost";
-        ringHost.style.margin = "12px 0 6px";
-        // place after heroHead
-        const head = $(".heroHead", heroCard);
-        head?.insertAdjacentElement("afterend", ringHost);
-      }
-      ringHost.innerHTML = ringSVG(momentum);
-    }
-
-    // Week snapshot
-    renderWeekSnapshot();
-  }
-
-  function renderWeekSnapshot() {
-    const { start, end } = weekRangeFor(state.dateKey, true);
-    const keys = [];
-    const cursor = new Date(start);
-    while (cursor <= end) {
-      keys.push(toKey(cursor));
-      cursor.setDate(cursor.getDate() + 1);
-    }
-
-    let closed = 0;
-    let workouts = 0;
-    let totalCals = 0;
-    let totalProtein = 0;
-    let daysWithFood = 0;
-
-    keys.forEach((k) => {
-      const day = getDay(k);
-      if (day.closed) closed++;
-      if (day.workout.completed) workouts++;
-      const tot = sumMacros(day.food.logged);
-      if (day.food.logged.length) {
-        daysWithFood++;
-        totalCals += tot.cals;
-        totalProtein += tot.p;
-      }
-    });
-
-    $("#uiClosedDays").textContent = `${closed}/7`;
-    $("#uiWorkoutsWeek").textContent = String(workouts);
-    $("#uiAvgCals").textContent = daysWithFood ? String(Math.round(totalCals / daysWithFood)) : "—";
-    $("#uiAvgProtein").textContent = daysWithFood ? String(Math.round(totalProtein / daysWithFood)) : "—";
-
-    // streak
-    $("#uiStreak").textContent = String(calcStreak());
-  }
-
-  function calcStreak() {
-    // streak = consecutive closed days ending at selected date (or today if selected)
-    let k = state.dateKey;
-    let streak = 0;
-    while (true) {
-      const day = getDay(k);
-      if (!day.closed) break;
-      streak++;
-      k = addDays(k, -1);
-      if (streak > 3650) break;
-    }
-    return streak;
-  }
-
-  /********************
-   * Render: Food
-   ********************/
-  function renderFood() {
-    $("#uiFoodDateSub").textContent = state.dateKey === toKey(new Date()) ? "Meals for Today" : "Meals for selected day";
-
-    const day = getDay(state.dateKey);
-    const logged = day.food.logged;
-    const planned = day.food.planned;
-
-    const totLogged = sumMacros(logged);
-    $("#uiFoodTotCals").textContent = fmtMacro(totLogged.cals);
-    $("#uiFoodTotP").textContent = fmtMacro(totLogged.p);
-    $("#uiFoodTotC").textContent = fmtMacro(totLogged.c);
-    $("#uiFoodTotF").textContent = fmtMacro(totLogged.f);
-
-    const host = $("#mealList");
-    if (!host) return;
-
-    host.innerHTML = `
-      ${foodBucketCard("Logged", "logged", logged)}
-      ${foodBucketCard("Planned", "planned", planned)}
-    `;
-  }
-
-  function foodBucketCard(title, bucket, items) {
-    const rows = items.map((e) => {
-      const grams = e.grams != null ? ` • ${e.grams}g` : "";
-      return `
-        <div class="listItem">
-          <div>
-            <div class="listTitle">${escapeHTML(e.name)} (${escapeHTML(String(e.qty))} ${escapeHTML(e.unit)}${grams})</div>
-            <div class="subtle">${e.cals} cals • P ${e.p} • C ${e.c} • F ${e.f}</div>
-          </div>
-          <button class="btn danger ghost" data-action="delFood" data-bucket="${bucket}" data-id="${e.id}">Delete</button>
-        </div>
-      `;
-    }).join("");
-
-    return `
-      <div class="card">
-        <div class="cardHead">
-          <div>
-            <div class="h2">${title}</div>
-            <div class="sub">${items.length ? `${items.length} item(s)` : "None"}</div>
-          </div>
-          <button class="btn" data-action="addFood" data-bucket="${bucket}">Add</button>
-        </div>
-        <div class="list">${rows || `<div class="subtle">None</div>`}</div>
-      </div>
-    `;
-  }
-
-  function renderFoodLibrary(search = "") {
+  function renderFoodLibrary(search) {
     const q = String(search || "").trim().toLowerCase();
 
-    const sorted = [...DB.foodLibrary].sort((a, b) => {
-      // favorites first
+    const sorted = DB.foodLibrary.slice().sort((a, b) => {
       const af = isFav(a.id) ? 0 : 1;
       const bf = isFav(b.id) ? 0 : 1;
       if (af !== bf) return af - bf;
       return a.name.localeCompare(b.name);
     });
 
-    const filtered = q
-      ? sorted.filter((x) => x.name.toLowerCase().includes(q))
-      : sorted;
+    const filtered = q ? sorted.filter((x) => x.name.toLowerCase().indexOf(q) >= 0) : sorted;
 
     const rows = filtered.map((item) => {
       const fav = isFav(item.id);
@@ -891,7 +448,7 @@
       `
         <div class="field" style="margin-bottom:10px;">
           <span>Search</span>
-          <input id="foodSearch" type="text" placeholder="Greek yogurt, banana, rice..." value="${escapeAttr(search)}" />
+          <input id="foodSearch" type="text" placeholder="Greek yogurt, banana, rice..." value="${escapeAttr(search || "")}" />
         </div>
 
         <div class="subtle" style="margin-bottom:10px;">
@@ -904,34 +461,13 @@
 
         <div class="h2" style="margin-bottom:6px;">Add new food</div>
         <div class="formGrid">
-          <label class="field">
-            <span>Name</span>
-            <input id="newFoodName" type="text" placeholder="Chicken breast" />
-          </label>
-          <label class="field">
-            <span>Calories</span>
-            <input id="newFoodCals" type="number" inputmode="numeric" />
-          </label>
-          <label class="field">
-            <span>Protein</span>
-            <input id="newFoodP" type="number" inputmode="numeric" />
-          </label>
-          <label class="field">
-            <span>Carbs</span>
-            <input id="newFoodC" type="number" inputmode="numeric" />
-          </label>
-          <label class="field">
-            <span>Fat</span>
-            <input id="newFoodF" type="number" inputmode="numeric" />
-          </label>
-          <label class="field">
-            <span>Default unit</span>
-            <input id="newFoodUnit" type="text" placeholder="cup / oz / serving" />
-          </label>
-          <label class="field">
-            <span>Default amount</span>
-            <input id="newFoodAmt" type="number" inputmode="decimal" value="1" />
-          </label>
+          <label class="field"><span>Name</span><input id="newFoodName" type="text" placeholder="Chicken breast" /></label>
+          <label class="field"><span>Calories</span><input id="newFoodCals" type="number" inputmode="numeric" /></label>
+          <label class="field"><span>Protein</span><input id="newFoodP" type="number" inputmode="numeric" /></label>
+          <label class="field"><span>Carbs</span><input id="newFoodC" type="number" inputmode="numeric" /></label>
+          <label class="field"><span>Fat</span><input id="newFoodF" type="number" inputmode="numeric" /></label>
+          <label class="field"><span>Default unit</span><input id="newFoodUnit" type="text" placeholder="cup / oz / serving" /></label>
+          <label class="field"><span>Default amount</span><input id="newFoodAmt" type="number" inputmode="decimal" value="1" /></label>
         </div>
       `,
       `
@@ -942,12 +478,11 @@
       `
     );
 
-    // hook up modal controls
     setTimeout(() => {
       on($("#foodSearch"), "input", (e) => renderFoodLibrary(e.target.value));
       on($("#btnCloseLib"), "click", closeModal);
       on($("#btnSaveNewFood"), "click", () => {
-        const name = $("#newFoodName").value.trim();
+        const name = ($("#newFoodName").value || "").trim();
         if (!name) return toast("Name required");
         const item = normalizeFoodItem({
           id: uid(),
@@ -956,7 +491,7 @@
           p: Number($("#newFoodP").value || 0),
           c: Number($("#newFoodC").value || 0),
           f: Number($("#newFoodF").value || 0),
-          unit: $("#newFoodUnit").value.trim() || "serving",
+          unit: ($("#newFoodUnit").value || "").trim() || "serving",
           amount: Number($("#newFoodAmt").value || 1),
         });
         DB.foodLibrary.push(item);
@@ -967,14 +502,14 @@
     }, 0);
   }
 
-  function openAddFoodFlow(bucket, preselectedFood = null) {
+  function openAddFoodFlow(bucket, preselectedFood) {
     const list = DB.foodLibrary;
     const food = preselectedFood || list[0] || normalizeFoodItem({ name: "Food", cals: 0, p: 0, c: 0, f: 0, unit: "serving", amount: 1 });
 
     openModal(
       `Add Food (${bucket === "logged" ? "Logged" : "Planned"})`,
       `
-        <div class="subtle" style="margin-bottom:10px;">Pick from Library for speed, or change serving/quantity below.</div>
+        <div class="subtle" style="margin-bottom:10px;">Serving + quantity supported.</div>
 
         <div class="row" style="justify-content:space-between; margin-bottom:10px;">
           <button class="btn ghost" id="btnOpenLibraryInline">Open Library</button>
@@ -984,6 +519,7 @@
         <div class="card" style="margin:0;">
           <div class="h2" style="margin-bottom:8px;">${escapeHTML(food.name)}</div>
           <div class="subtle">${food.cals} cals • P ${food.p} • C ${food.c} • F ${food.f}</div>
+
           <div class="divider"></div>
 
           <div class="formGrid">
@@ -1002,7 +538,7 @@
           </div>
 
           <div class="subtle" style="margin-top:6px;">
-            Tip: Quantity = multiplier. Example: 2 cups = qty 2, unit “cup”.
+            Quantity multiplies the macros. Example: 2 cups = qty 2, unit “cup”.
           </div>
         </div>
       `,
@@ -1014,108 +550,93 @@
       `
     );
 
-    // event hooks
     setTimeout(() => {
       on($("#btnCancelAddFood"), "click", closeModal);
       on($("#btnOpenLibraryInline"), "click", () => renderFoodLibrary(""));
       on($("#btnUseQuick"), "click", () => {
-        const gy = DB.foodLibrary.find((x) => x.name.toLowerCase().includes("greek yogurt")) || food;
+        const gy = DB.foodLibrary.find((x) => x.name.toLowerCase().indexOf("greek yogurt") >= 0) || food;
         openAddFoodFlow(bucket, gy);
       });
       on($("#btnConfirmAddFood"), "click", () => {
-        const qty = $("#foodQty").value;
-        const unit = $("#foodUnit").value.trim() || "serving";
-        const grams = $("#foodGrams").value;
-
-        addFoodToDay(state.dateKey, bucket, food, qty, unit, grams);
+        addFoodToDay(state.dateKey, bucket, food, $("#foodQty").value, ($("#foodUnit").value || "").trim(), $("#foodGrams").value);
         closeModal();
         renderAll();
       });
-
-      // library actions inside modal (delegate from overlay)
     }, 0);
   }
 
   /********************
-   * Render: Workouts
+   * Workouts
    ********************/
-  function renderWorkouts() {
-    $("#uiWorkoutDateSub").textContent = state.dateKey === toKey(new Date()) ? "Plan or log for Today" : "Plan or log for selected day";
-
-    const day = getDay(state.dateKey);
-    const status = day.workout.completed ? "Completed" : (day.workout.planned ? "Planned" : "No workout planned");
-    $("#uiWorkoutStatus").textContent = status;
-
-    const editor = $("#workoutEditor");
-    if (!editor) return;
-
+  function ensureWorkoutPlan(dateKey) {
+    const day = getDay(dateKey);
     if (!day.workout.planned) {
-      editor.classList.add("hidden");
-      $("#exerciseEditor").innerHTML = "";
-      $("#workoutHistory").innerHTML = renderWorkoutHistory();
-      return;
+      day.workout.planned = { id: uid(), templateId: null, name: "Workout", exercises: [], createdAt: Date.now() };
     }
-
-    editor.classList.remove("hidden");
-
-    // inject rest timer host
-    let restHost = $("#restTimerInline");
-    if (!restHost) {
-      restHost = document.createElement("div");
-      restHost.id = "restTimerInline";
-      restHost.style.margin = "10px 0 0";
-      editor.insertAdjacentElement("afterbegin", restHost);
-    }
-    renderRestTimerInline();
-
-    $("#exerciseEditor").innerHTML = day.workout.planned.exercises.length
-      ? day.workout.planned.exercises.map(renderExerciseRow).join("")
-      : `<div class="subtle">No exercises yet. Tap “Add exercise”.</div>`;
-
-    $("#workoutHistory").innerHTML = renderWorkoutHistory();
+    return day.workout.planned;
   }
 
-  function renderExerciseRow(e) {
-    const pr = getPR(e.name);
-    const unit = DB.settings.unitSystem || "lb";
+  function updatePR(exerciseName, weight, reps) {
+    const name = String(exerciseName || "").trim().toLowerCase();
+    if (!name) return;
 
-    return `
-      <div class="card" style="margin:12px 0 0;">
-        <div class="cardHead">
-          <div style="min-width:0;">
-            <div class="h2" style="margin-bottom:2px;">${escapeHTML(e.name)}</div>
-            <div class="sub">${escapeHTML(e.group || "—")} • PR: ${pr.bestWeight ?? "—"}${pr.bestWeight != null ? unit : ""} / ${pr.bestReps ?? "—"} reps</div>
-          </div>
-          <button class="btn danger ghost" data-action="delExercise" data-id="${e.id}">Delete</button>
-        </div>
+    const w = Number(weight);
+    const r = Number(reps);
 
-        <div class="formGrid">
-          <label class="field">
-            <span>Weight (${unit})</span>
-            <input data-field="weight" data-id="${e.id}" type="number" inputmode="decimal" value="${e.weight ?? ""}" placeholder="e.g., 135" />
-          </label>
-          <label class="field">
-            <span>Sets</span>
-            <input data-field="sets" data-id="${e.id}" type="number" inputmode="numeric" value="${e.sets ?? 3}" />
-          </label>
-          <label class="field">
-            <span>Reps</span>
-            <input data-field="reps" data-id="${e.id}" type="number" inputmode="numeric" value="${e.reps ?? 8}" />
-          </label>
-        </div>
+    const cur = DB.settings.prs[name] || { bestWeight: null, bestReps: null };
+    if (Number.isFinite(w) && (cur.bestWeight == null || w > cur.bestWeight)) cur.bestWeight = w;
+    if (Number.isFinite(r) && (cur.bestReps == null || r > cur.bestReps)) cur.bestReps = r;
+    DB.settings.prs[name] = cur;
+  }
 
-        <label class="field" style="margin-top:10px;">
-          <span>Notes</span>
-          <input data-field="notes" data-id="${e.id}" type="text" value="${escapeAttr(e.notes || "")}" placeholder="Optional" />
-        </label>
+  function getPR(exerciseName) {
+    const name = String(exerciseName || "").trim().toLowerCase();
+    return DB.settings.prs[name] || { bestWeight: null, bestReps: null };
+  }
 
-        <div class="row" style="margin-top:10px; justify-content:space-between;">
-          <button class="btn ghost" data-action="startRest" data-sec="60">Rest 60s</button>
-          <button class="btn ghost" data-action="startRest" data-sec="90">Rest 90s</button>
-          <button class="btn ghost" data-action="startRest" data-sec="120">Rest 120s</button>
-        </div>
-      </div>
-    `;
+  function markWorkoutComplete(dateKey) {
+    const day = getDay(dateKey);
+    if (!day.workout.planned || day.workout.planned.exercises.length === 0) return toast("Add exercises first");
+
+    const completed = {
+      id: uid(),
+      dateKey,
+      templateName: day.workout.planned.name || "Workout",
+      exercises: day.workout.planned.exercises.map((e) => Object.assign({}, e)),
+      durationSec: null,
+      completedAt: Date.now(),
+    };
+
+    day.workout.completed = completed;
+    DB.workoutHistory.unshift(completed);
+
+    completed.exercises.forEach((e) => updatePR(e.name, e.weight, e.reps));
+
+    saveData();
+    toast("Workout complete ✓");
+  }
+
+  function undoWorkoutComplete(dateKey) {
+    const day = getDay(dateKey);
+    if (!day.workout.completed) return;
+
+    const id = day.workout.completed.id;
+    DB.workoutHistory = DB.workoutHistory.filter((w) => w.id !== id);
+    day.workout.completed = null;
+    saveData();
+    toast("Workout un-completed");
+  }
+
+  function deleteWorkoutFromHistory(workoutId) {
+    DB.workoutHistory = DB.workoutHistory.filter((w) => w.id !== workoutId);
+    Object.keys(DB.days).forEach((k) => {
+      if (DB.days[k] && DB.days[k].workout && DB.days[k].workout.completed && DB.days[k].workout.completed.id === workoutId) {
+        DB.days[k].workout.completed = null;
+      }
+    });
+    saveData();
+    toast("Deleted workout");
+    renderWorkouts();
   }
 
   function renderWorkoutHistory() {
@@ -1131,7 +652,6 @@
         </div>
       `;
     }).join("");
-
     return rows || `<div class="subtle">No history yet.</div>`;
   }
 
@@ -1162,9 +682,7 @@
           <span>Template name</span>
           <input id="newTplName" type="text" placeholder="Push Day / Upper A / etc" />
         </label>
-        <div class="subtle" style="margin-top:6px;">
-          This saves whatever is currently planned on the selected day.
-        </div>
+        <div class="subtle" style="margin-top:6px;">This saves whatever is currently planned on the selected day.</div>
       `,
       `
         <div class="row" style="justify-content:space-between;">
@@ -1177,21 +695,16 @@
     setTimeout(() => {
       on($("#btnCloseTpl"), "click", closeModal);
       on($("#btnSaveTpl"), "click", () => {
-        const name = $("#newTplName").value.trim();
+        const name = ($("#newTplName").value || "").trim();
         if (!name) return toast("Name required");
-
         const day = getDay(state.dateKey);
-        if (!day.workout.planned || day.workout.planned.exercises.length === 0) {
-          toast("Plan exercises first");
-          return;
-        }
+        if (!day.workout.planned || day.workout.planned.exercises.length === 0) return toast("Plan exercises first");
 
         const tpl = {
           id: uid(),
           name,
-          exercises: day.workout.planned.exercises.map((e) => ({ ...e, id: uid() })),
+          exercises: day.workout.planned.exercises.map((e) => Object.assign({}, e, { id: uid() })),
         };
-
         DB.templates.unshift(tpl);
         saveData();
         toast("Template saved ✓");
@@ -1223,15 +736,9 @@
       </div>
     `).join("");
 
-    openModal("Add exercise", `
-      <div class="subtle" style="margin-bottom:10px;">Grouped by muscle. Scrolls properly.</div>
-      ${groups}
-    `, `
-      <div class="row" style="justify-content:flex-end;">
-        <button class="btn danger ghost" id="btnCloseExPicker">Close</button>
-      </div>
-    `);
-
+    openModal("Add exercise", `<div class="subtle" style="margin-bottom:10px;">Grouped by muscle.</div>${groups}`,
+      `<div class="row" style="justify-content:flex-end;"><button class="btn danger ghost" id="btnCloseExPicker">Close</button></div>`
+    );
     setTimeout(() => on($("#btnCloseExPicker"), "click", closeModal), 0);
   }
 
@@ -1244,90 +751,178 @@
   }
 
   /********************
-   * Render: Calendar
+   * Rest timer
    ********************/
-  function renderCalendar() {
-    const titleEl = $("#uiCalTitle");
-    if (titleEl) titleEl.textContent = monthTitle(state.calMonth);
+  function renderRestTimerInline() {
+    const el = $("#restTimerInline");
+    if (!el) return;
 
-    const gridEl = $("#calGrid");
-    if (!gridEl) return;
-
-    const cells = buildCalendarGrid(state.calMonth);
-    const todayKey = toKey(new Date());
-
-    gridEl.innerHTML = cells.map((d) => {
-      if (!d) return `<div class="calCell empty"></div>`;
-      const key = toKey(d);
-      const sig = daySignals(key);
-
-      // cleaner dot signals (no rings, no big border)
-      const dots = `
-        <div class="calDots">
-          ${sig.closed ? `<span class="dot dotClosed"></span>` : ``}
-          ${sig.food ? `<span class="dot dotFood"></span>` : ``}
-          ${sig.workout ? `<span class="dot dotWo"></span>` : ``}
-          ${!sig.closed && !sig.food && !sig.workout && sig.planned ? `<span class="dot dotPlanned"></span>` : ``}
-        </div>
-      `;
-
-      return `
-        <button class="calCell ${key === state.dateKey ? "selected" : ""} ${key === todayKey ? "today" : ""}"
-          data-action="selectDay" data-key="${key}">
-          <div class="calNum">${d.getDate()}</div>
-          ${dots}
-        </button>
-      `;
-    }).join("");
-
-    // Add a lightweight “selected day preview” section at top of calendar screen
-    injectCalendarPreview();
+    if (!state.restTimer.running) {
+      el.innerHTML = `<span class="subtle">Rest timer</span> <button class="btn ghost" id="btnStartRest">Start</button>`;
+      return;
+    }
+    const mm = Math.floor(state.restTimer.remaining / 60);
+    const ss = state.restTimer.remaining % 60;
+    el.innerHTML = `<span class="subtle">Rest:</span> <strong>${mm}:${pad2(ss)}</strong> <button class="btn ghost" id="btnStopRest">Stop</button>`;
   }
 
-  function injectCalendarPreview() {
-    // We’ll reuse existing Calendar screen and insert preview card if missing
-    const screen = $(`.screen[data-screen="calendar"]`);
-    if (!screen) return;
+  function startRestTimer(seconds) {
+    const secs = Math.max(0, Number(seconds || 0));
+    if (!secs) return;
 
-    let preview = $("#calPreview");
-    if (!preview) {
-      preview = document.createElement("div");
-      preview.id = "calPreview";
-      preview.className = "card";
-      // insert after calendar grid card
-      const gridCard = $(".calGrid", screen)?.closest(".card");
-      gridCard?.insertAdjacentElement("afterend", preview);
-    }
+    state.restTimer.running = true;
+    state.restTimer.remaining = secs;
+    clearInterval(state.restTimer.interval);
 
-    const day = getDay(state.dateKey);
-    preview.innerHTML = `
-      <div class="cardHead">
-        <div>
-          <div class="h2">Selected day</div>
-          <div class="sub">${fromKey(state.dateKey).toLocaleDateString(undefined, { weekday:"long", month:"short", day:"numeric" })}</div>
-        </div>
-        <button class="btn" id="btnOpenSelected">Open</button>
-      </div>
+    state.restTimer.interval = setInterval(() => {
+      state.restTimer.remaining -= 1;
+      renderRestTimerInline();
+      if (state.restTimer.remaining <= 0) {
+        clearInterval(state.restTimer.interval);
+        state.restTimer.running = false;
+        state.restTimer.remaining = 0;
+        renderRestTimerInline();
+        toast("Rest done ✓");
+        if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+      }
+    }, 1000);
 
-      <div class="miniRow">
-        <div class="miniItem"><span class="miniK">Food</span><span class="miniV">${day.food.logged.length ? "✓" : "—"}</span></div>
-        <div class="miniItem"><span class="miniK">Workout</span><span class="miniV">${day.workout.completed ? "✓" : "—"}</span></div>
-        <div class="miniItem"><span class="miniK">Closed</span><span class="miniV">${day.closed ? "✓" : "—"}</span></div>
-      </div>
-    `;
+    renderRestTimerInline();
+  }
 
-    setTimeout(() => {
-      on($("#btnOpenSelected"), "click", () => setScreen("today"));
-    }, 0);
+  function stopRestTimer() {
+    clearInterval(state.restTimer.interval);
+    state.restTimer.running = false;
+    state.restTimer.remaining = 0;
+    renderRestTimerInline();
   }
 
   /********************
-   * Render: Analytics (Stats)
+   * Close day + undo
    ********************/
-  function renderAnalytics() {
-    const { start, end } = weekRangeFor(state.dateKey, true);
-    $("#uiAnalyticsWeek").textContent =
-      `${start.toLocaleDateString(undefined, { month:"short", day:"numeric" })} – ${end.toLocaleDateString(undefined, { month:"short", day:"numeric" })}`;
+  function canCloseDay(day) {
+    return day.food.logged.length > 0 || !!day.workout.completed;
+  }
+  function closeDay(dateKey) {
+    const day = getDay(dateKey);
+    if (!canCloseDay(day)) return toast("Log food or a workout");
+    day.closed = true;
+    saveData();
+    toast("Day closed ✓");
+  }
+  function uncloseDay(dateKey) {
+    const day = getDay(dateKey);
+    day.closed = false;
+    saveData();
+    toast("Day reopened");
+  }
+
+  /********************
+   * Calendar
+   ********************/
+  function setCalMonth(d) {
+    state.calMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    UI.calMonth = toKey(state.calMonth);
+    saveUI();
+    renderCalendar();
+  }
+
+  function buildCalendarGrid(monthDate) {
+    const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+    const startDay = first.getDay();
+    const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+
+    const cells = [];
+    for (let i = 0; i < startDay; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), d));
+    return cells;
+  }
+
+  function daySignals(dateKey) {
+    const day = getDay(dateKey);
+    return {
+      closed: !!day.closed,
+      food: day.food.logged.length > 0,
+      workout: !!day.workout.completed,
+      planned: day.food.planned.length > 0 || !!day.workout.planned,
+    };
+  }
+
+  /********************
+   * Render: Today
+   ********************/
+  function renderToday() {
+    updateDateLabel();
+
+    const day = getDay(state.dateKey);
+    const calsTarget = Number(DB.settings.calTarget || 0);
+    const proteinTarget = Number(DB.settings.proteinTarget || 0);
+    const totals = sumMacros(day.food.logged);
+
+    const status = day.closed ? "Closed" : "In Progress";
+    $("#uiStatusLine").textContent = `Status: ${status}`;
+    $("#uiStatusPill").textContent = status;
+
+    const uiCals = $("#uiCals");
+    const uiCalsHint = $("#uiCalsHint");
+    const uiProtein = $("#uiProtein");
+    const uiProteinHint = $("#uiProteinHint");
+
+    if (uiCals) uiCals.textContent = `${fmtMacro(totals.cals)} / ${fmtMacro(calsTarget)}`;
+    if (uiProtein) uiProtein.textContent = `${fmtMacro(totals.p)} / ${fmtMacro(proteinTarget)}g`;
+
+    if (uiCalsHint) uiCalsHint.textContent = `${Math.max(0, calsTarget - totals.cals)} remaining`;
+    if (uiProteinHint) uiProteinHint.textContent = `${Math.max(0, proteinTarget - totals.p)}g remaining`;
+
+    $("#uiCarbs").textContent = `${fmtMacro(totals.c)}g`;
+    $("#uiFat").textContent = `${fmtMacro(totals.f)}g`;
+
+    $("#uiFoodSub").textContent = day.food.logged.length ? `${day.food.logged.length} item(s)` : "Not logged";
+    $("#uiWorkoutSub").textContent = day.workout.completed ? "Completed" : (day.workout.planned ? "Planned" : "Not logged");
+    $("#uiFoodMark").textContent = day.food.logged.length ? "✓" : "—";
+    $("#uiWorkoutMark").textContent = day.workout.completed ? "✓" : "—";
+
+    const weighDay = Number(DB.settings.weighInDay);
+    const d = fromKey(state.dateKey);
+    const isWeighDay = d.getDay() === weighDay;
+    $("#uiWeighInSub").textContent = isWeighDay ? "Today" : "Weekly only";
+    $("#uiWeighInMark").textContent = "—";
+
+    const closeBtn = $("#btnCloseDay");
+    const hint = $("#uiCloseHint");
+    const canClose = canCloseDay(day);
+    if (closeBtn) closeBtn.disabled = !canClose || day.closed;
+    if (hint) {
+      hint.textContent = day.closed
+        ? "Day is closed. You can reopen it from Quick Log."
+        : (canClose ? "Ready to close when you are." : "Log food or a workout to enable Close Today.");
+    }
+
+    // Momentum ring
+    const momentum = computeMomentum(state.dateKey);
+    const host = $("#momentumHost");
+    if (host) host.innerHTML = ringSVG(momentum);
+
+    renderWeekSnapshot();
+  }
+
+  function calcStreak() {
+    let k = state.dateKey;
+    let streak = 0;
+    while (true) {
+      const day = getDay(k);
+      if (!day.closed) break;
+      streak++;
+      k = addDays(k, -1);
+      if (streak > 3650) break;
+    }
+    return streak;
+  }
+
+  function renderWeekSnapshot() {
+    const range = weekRangeFor(state.dateKey, true);
+    const start = range.start;
+    const end = range.end;
 
     const keys = [];
     const cursor = new Date(start);
@@ -1354,15 +949,236 @@
       }
     });
 
+    $("#uiClosedDays").textContent = `${closed}/7`;
+    $("#uiWorkoutsWeek").textContent = String(workouts);
+    $("#uiAvgCals").textContent = daysWithFood ? String(Math.round(totalCals / daysWithFood)) : "—";
+    $("#uiAvgProtein").textContent = daysWithFood ? String(Math.round(totalProtein / daysWithFood)) : "—";
+    $("#uiStreak").textContent = String(calcStreak());
+  }
+
+  /********************
+   * Render: Food
+   ********************/
+  function foodBucketCard(title, bucket, items) {
+    const rows = items.map((e) => {
+      const grams = e.grams != null ? ` • ${e.grams}g` : "";
+      return `
+        <div class="listItem">
+          <div>
+            <div class="listTitle">${escapeHTML(e.name)} (${escapeHTML(String(e.qty))} ${escapeHTML(e.unit)}${grams})</div>
+            <div class="subtle">${e.cals} cals • P ${e.p} • C ${e.c} • F ${e.f}</div>
+          </div>
+          <button class="btn danger ghost" data-action="delFood" data-bucket="${bucket}" data-id="${e.id}">Delete</button>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div class="card">
+        <div class="cardHead">
+          <div>
+            <div class="h2">${title}</div>
+            <div class="sub">${items.length ? `${items.length} item(s)` : "None"}</div>
+          </div>
+          <button class="btn" data-action="addFood" data-bucket="${bucket}">Add</button>
+        </div>
+        <div class="list">${rows || `<div class="subtle">None</div>`}</div>
+      </div>
+    `;
+  }
+
+  function renderFood() {
+    $("#uiFoodDateSub").textContent = state.dateKey === toKey(new Date()) ? "Meals for Today" : "Meals for selected day";
+
+    const day = getDay(state.dateKey);
+    const logged = day.food.logged;
+    const planned = day.food.planned;
+
+    const totLogged = sumMacros(logged);
+    $("#uiFoodTotCals").textContent = fmtMacro(totLogged.cals);
+    $("#uiFoodTotP").textContent = fmtMacro(totLogged.p);
+    $("#uiFoodTotC").textContent = fmtMacro(totLogged.c);
+    $("#uiFoodTotF").textContent = fmtMacro(totLogged.f);
+
+    const host = $("#mealList");
+    if (!host) return;
+    host.innerHTML = foodBucketCard("Logged", "logged", logged) + foodBucketCard("Planned", "planned", planned);
+  }
+
+  /********************
+   * Render: Workouts
+   ********************/
+  function renderExerciseRow(e) {
+    const pr = getPR(e.name);
+    const unit = DB.settings.unitSystem || "lb";
+
+    return `
+      <div class="card" style="margin:12px 0 0;">
+        <div class="cardHead">
+          <div style="min-width:0;">
+            <div class="h2" style="margin-bottom:2px;">${escapeHTML(e.name)}</div>
+            <div class="sub">${escapeHTML(e.group || "—")} • PR: ${pr.bestWeight == null ? "—" : pr.bestWeight + unit} / ${pr.bestReps == null ? "—" : pr.bestReps + " reps"}</div>
+          </div>
+          <button class="btn danger ghost" data-action="delExercise" data-id="${e.id}">Delete</button>
+        </div>
+
+        <div class="formGrid">
+          <label class="field">
+            <span>Weight (${unit})</span>
+            <input data-field="weight" data-id="${e.id}" type="number" inputmode="decimal" value="${e.weight == null ? "" : e.weight}" placeholder="e.g., 135" />
+          </label>
+          <label class="field">
+            <span>Sets</span>
+            <input data-field="sets" data-id="${e.id}" type="number" inputmode="numeric" value="${e.sets == null ? 3 : e.sets}" />
+          </label>
+          <label class="field">
+            <span>Reps</span>
+            <input data-field="reps" data-id="${e.id}" type="number" inputmode="numeric" value="${e.reps == null ? 8 : e.reps}" />
+          </label>
+        </div>
+
+        <label class="field" style="margin-top:10px;">
+          <span>Notes</span>
+          <input data-field="notes" data-id="${e.id}" type="text" value="${escapeAttr(e.notes || "")}" placeholder="Optional" />
+        </label>
+
+        <div class="row" style="margin-top:10px; justify-content:space-between;">
+          <button class="btn ghost" data-action="startRest" data-sec="60">Rest 60s</button>
+          <button class="btn ghost" data-action="startRest" data-sec="90">Rest 90s</button>
+          <button class="btn ghost" data-action="startRest" data-sec="120">Rest 120s</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderWorkouts() {
+    $("#uiWorkoutDateSub").textContent = state.dateKey === toKey(new Date()) ? "Plan or log for Today" : "Plan or log for selected day";
+
+    const day = getDay(state.dateKey);
+    const status = day.workout.completed ? "Completed" : (day.workout.planned ? "Planned" : "No workout planned");
+    $("#uiWorkoutStatus").textContent = status;
+
+    const editor = $("#workoutEditor");
+    if (!editor) return;
+
+    if (!day.workout.planned) {
+      editor.classList.add("hidden");
+      $("#exerciseEditor").innerHTML = "";
+      $("#workoutHistory").innerHTML = renderWorkoutHistory();
+      return;
+    }
+
+    editor.classList.remove("hidden");
+    renderRestTimerInline();
+
+    $("#exerciseEditor").innerHTML = day.workout.planned.exercises.length
+      ? day.workout.planned.exercises.map(renderExerciseRow).join("")
+      : `<div class="subtle">No exercises yet. Tap “Add exercise”.</div>`;
+
+    $("#workoutHistory").innerHTML = renderWorkoutHistory();
+  }
+
+  /********************
+   * Render: Calendar
+   ********************/
+  function injectCalendarPreview() {
+    const preview = $("#calPreview");
+    if (!preview) return;
+
+    const day = getDay(state.dateKey);
+    preview.className = "card";
+    preview.innerHTML = `
+      <div class="cardHead">
+        <div>
+          <div class="h2">Selected day</div>
+          <div class="sub">${fromKey(state.dateKey).toLocaleDateString(undefined, { weekday:"long", month:"short", day:"numeric" })}</div>
+        </div>
+        <button class="btn" id="btnOpenSelected">Open</button>
+      </div>
+
+      <div class="miniRow">
+        <div class="miniItem"><span class="miniK">Food</span><span class="miniV">${day.food.logged.length ? "✓" : "—"}</span></div>
+        <div class="miniItem"><span class="miniK">Workout</span><span class="miniV">${day.workout.completed ? "✓" : "—"}</span></div>
+        <div class="miniItem"><span class="miniK">Closed</span><span class="miniV">${day.closed ? "✓" : "—"}</span></div>
+      </div>
+    `;
+
+    setTimeout(() => on($("#btnOpenSelected"), "click", () => setScreen("today")), 0);
+  }
+
+  function renderCalendar() {
+    const titleEl = $("#uiCalTitle");
+    if (titleEl) titleEl.textContent = monthTitle(state.calMonth);
+
+    const gridEl = $("#calGrid");
+    if (!gridEl) return;
+
+    const cells = buildCalendarGrid(state.calMonth);
+    const todayKey = toKey(new Date());
+
+    gridEl.innerHTML = cells.map((d) => {
+      if (!d) return `<div class="calCell empty"></div>`;
+      const key = toKey(d);
+      const sig = daySignals(key);
+
+      const dots = `
+        <div class="calDots">
+          ${sig.closed ? `<span class="dot dotClosed"></span>` : ``}
+          ${sig.food ? `<span class="dot dotFood"></span>` : ``}
+          ${sig.workout ? `<span class="dot dotWo"></span>` : ``}
+          ${!sig.closed && !sig.food && !sig.workout && sig.planned ? `<span class="dot dotPlanned"></span>` : ``}
+        </div>
+      `;
+
+      return `
+        <button class="calCell ${key === state.dateKey ? "selected" : ""} ${key === todayKey ? "today" : ""}"
+          data-action="selectDay" data-key="${key}">
+          <div class="calNum">${d.getDate()}</div>
+          ${dots}
+        </button>
+      `;
+    }).join("");
+
+    injectCalendarPreview();
+  }
+
+  /********************
+   * Render: Analytics
+   ********************/
+  function renderAnalytics() {
+    const range = weekRangeFor(state.dateKey, true);
+    $("#uiAnalyticsWeek").textContent =
+      `${range.start.toLocaleDateString(undefined, { month:"short", day:"numeric" })} – ${range.end.toLocaleDateString(undefined, { month:"short", day:"numeric" })}`;
+
+    const keys = [];
+    const cursor = new Date(range.start);
+    while (cursor <= range.end) {
+      keys.push(toKey(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    let closed = 0, workouts = 0, totalCals = 0, totalProtein = 0, daysWithFood = 0;
+
+    keys.forEach((k) => {
+      const day = getDay(k);
+      if (day.closed) closed++;
+      if (day.workout.completed) workouts++;
+      const tot = sumMacros(day.food.logged);
+      if (day.food.logged.length) {
+        daysWithFood++;
+        totalCals += tot.cals;
+        totalProtein += tot.p;
+      }
+    });
+
     $("#anClosed").textContent = String(closed);
     $("#anWorkouts").textContent = String(workouts);
     $("#anAvgCals").textContent = daysWithFood ? String(Math.round(totalCals / daysWithFood)) : "—";
     $("#anAvgProtein").textContent = daysWithFood ? String(Math.round(totalProtein / daysWithFood)) : "—";
 
-    // Weigh-ins list
     const list = $("#weighInList");
     if (list) {
-      list.innerHTML = DB.weighIns
+      const rows = DB.weighIns
         .slice()
         .sort((a, b) => b.dateKey.localeCompare(a.dateKey))
         .map((w) => `
@@ -1373,15 +1189,15 @@
             </div>
             <button class="btn danger ghost" data-action="delWeighIn" data-id="${w.id}">Delete</button>
           </div>
-        `).join("") || `<div class="subtle">No weigh-ins yet.</div>`;
+        `).join("");
+      list.innerHTML = rows || `<div class="subtle">No weigh-ins yet.</div>`;
     }
 
-    // Settings inputs
     $("#setCals").value = DB.settings.calTarget;
     $("#setProtein").value = DB.settings.proteinTarget;
     $("#setWeighDay").value = String(DB.settings.weighInDay || 1);
+    $("#setTheme").value = (DB.settings.themeColor || "#0B1220").toLowerCase();
 
-    // live theme-color update
     setThemeColor(DB.settings.themeColor || "#0B1220");
   }
 
@@ -1395,9 +1211,24 @@
     if (state.screen === "workouts") renderWorkouts();
     if (state.screen === "calendar") renderCalendar();
     if (state.screen === "analytics") renderAnalytics();
+  }
 
-    // Always keep top safe-ish for iPhone by setting a CSS var
-    document.documentElement.style.setProperty("--safeTop", `${window.safeAreaInsetsTop || 0}px`);
+  /********************
+   * Service worker
+   ********************/
+  function registerSW() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+  }
+
+  /********************
+   * Launch overlay (always dismiss, even if something errors)
+   ********************/
+  function hideLaunchOverlaySoon() {
+    const el = $("#launchOverlay");
+    if (!el) return;
+    setTimeout(() => el.classList.add("hidden"), 350);  // quick fade
+    setTimeout(() => { el.style.display = "none"; }, 900);
   }
 
   /********************
@@ -1405,29 +1236,19 @@
    ********************/
   function bindEvents() {
     // Bottom nav
-    $$(".navItem").forEach((b) => {
-      on(b, "click", () => setScreen(b.dataset.nav));
-    });
+    $$(".navItem").forEach((b) => on(b, "click", () => setScreen(b.dataset.nav)));
 
     // top date nav
     on($("#btnPrevDay"), "click", () => setDate(addDays(state.dateKey, -1)));
     on($("#btnNextDay"), "click", () => setDate(addDays(state.dateKey, +1)));
-
-    // “Pick day” just jumps to today for now (simple)
-    on($("#btnPickDay"), "click", () => {
-      setDate(toKey(new Date()));
-      toast("Back to Today");
-    });
+    on($("#btnPickDay"), "click", () => { setDate(toKey(new Date())); toast("Back to Today"); });
 
     // Today screen shortcuts
     on($("#btnGoFood"), "click", () => setScreen("food"));
     on($("#btnGoWorkouts"), "click", () => setScreen("workouts"));
 
     // Close day
-    on($("#btnCloseDay"), "click", () => {
-      closeDay(state.dateKey);
-      renderAll();
-    });
+    on($("#btnCloseDay"), "click", () => { closeDay(state.dateKey); renderAll(); });
 
     // Quick Log
     on($("#btnQuickLog"), "click", () => {
@@ -1449,11 +1270,7 @@
             <button class="btn ghost" id="qlUndoWorkout" ${day.workout.completed ? "" : "disabled"}>Undo Workout Complete</button>
           </div>
         `,
-        `
-          <div class="row" style="justify-content:flex-end;">
-            <button class="btn danger ghost" id="qlDone">Done</button>
-          </div>
-        `
+        `<div class="row" style="justify-content:flex-end;"><button class="btn danger ghost" id="qlDone">Done</button></div>`
       );
 
       setTimeout(() => {
@@ -1466,79 +1283,43 @@
           closeModal();
           setScreen("workouts");
         });
-        on($("#qlCloseDay"), "click", () => {
-          closeDay(state.dateKey);
-          renderAll();
-          closeModal();
-        });
-        on($("#qlUncloseDay"), "click", () => {
-          uncloseDay(state.dateKey);
-          renderAll();
-          closeModal();
-        });
-        on($("#qlUndoWorkout"), "click", () => {
-          undoWorkoutComplete(state.dateKey);
-          renderAll();
-          closeModal();
-        });
+        on($("#qlCloseDay"), "click", () => { closeDay(state.dateKey); renderAll(); closeModal(); });
+        on($("#qlUncloseDay"), "click", () => { uncloseDay(state.dateKey); renderAll(); closeModal(); });
+        on($("#qlUndoWorkout"), "click", () => { undoWorkoutComplete(state.dateKey); renderAll(); closeModal(); });
       }, 0);
     });
 
-    // Food screen actions
+    // Food actions
     on($("#btnFoodLibrary"), "click", () => renderFoodLibrary(""));
     on($("#btnCopyPrevDay"), "click", () => {
       const prevKey = addDays(state.dateKey, -1);
       const prev = getDay(prevKey);
       const cur = getDay(state.dateKey);
-      // Copy logged only (you can adjust)
-      cur.food.logged = prev.food.logged.map((e) => ({ ...e, id: uid(), createdAt: Date.now() }));
+      cur.food.logged = prev.food.logged.map((e) => Object.assign({}, e, { id: uid(), createdAt: Date.now() }));
       saveData();
       toast("Copied ✓");
       renderAll();
     });
 
-    // Workouts screen actions
+    // Workouts actions
     on($("#btnTemplates"), "click", openTemplatesModal);
-    on($("#btnPlanWorkout"), "click", () => {
-      ensureWorkoutPlan(state.dateKey);
-      saveData();
-      toast("Planned ✓");
-      renderWorkouts();
-    });
+    on($("#btnPlanWorkout"), "click", () => { ensureWorkoutPlan(state.dateKey); saveData(); toast("Planned ✓"); renderWorkouts(); });
+    on($("#btnAddExercise"), "click", () => { ensureWorkoutPlan(state.dateKey); saveData(); openExercisePicker(); });
+    on($("#btnMarkWorkoutComplete"), "click", () => { markWorkoutComplete(state.dateKey); renderAll(); });
+    on($("#btnSaveWorkoutLog"), "click", () => { saveData(); toast("Saved ✓"); renderWorkouts(); });
 
-    on($("#btnAddExercise"), "click", () => {
-      ensureWorkoutPlan(state.dateKey);
-      saveData();
-      openExercisePicker();
-    });
-
-    on($("#btnMarkWorkoutComplete"), "click", () => {
-      markWorkoutComplete(state.dateKey);
-      renderAll();
-    });
-
-    on($("#btnSaveWorkoutLog"), "click", () => {
-      saveData();
-      toast("Saved ✓");
-      renderWorkouts();
-    });
-
-    // Calendar nav
-    on($("#btnCalPrev"), "click", () => {
-      const d = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() - 1, 1);
-      setCalMonth(d);
-    });
-    on($("#btnCalNext"), "click", () => {
-      const d = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() + 1, 1);
-      setCalMonth(d);
-    });
+    // Calendar month nav
+    on($("#btnCalPrev"), "click", () => setCalMonth(new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() - 1, 1)));
+    on($("#btnCalNext"), "click", () => setCalMonth(new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() + 1, 1)));
 
     // Analytics settings
     on($("#btnSaveSettings"), "click", () => {
       DB.settings.calTarget = Number($("#setCals").value || 0);
       DB.settings.proteinTarget = Number($("#setProtein").value || 0);
       DB.settings.weighInDay = Number($("#setWeighDay").value || 1);
+      DB.settings.themeColor = ($("#setTheme").value || "#0B1220");
       saveData();
+      setThemeColor(DB.settings.themeColor);
       toast("Saved ✓");
       renderAll();
     });
@@ -1554,20 +1335,12 @@
     on($("#btnLogWeighIn"), "click", () => {
       openModal(
         "Log weigh-in",
-        `
-          <label class="field">
-            <span>Weight (${DB.settings.unitSystem})</span>
-            <input id="wiVal" type="number" inputmode="decimal" placeholder="e.g., 195" />
-          </label>
-        `,
-        `
-          <div class="row" style="justify-content:space-between;">
-            <button class="btn danger ghost" id="wiCancel">Cancel</button>
-            <button class="btn primary" id="wiSave">Save</button>
-          </div>
-        `
+        `<label class="field"><span>Weight (${DB.settings.unitSystem})</span><input id="wiVal" type="number" inputmode="decimal" placeholder="e.g., 195" /></label>`,
+        `<div class="row" style="justify-content:space-between;">
+           <button class="btn danger ghost" id="wiCancel">Cancel</button>
+           <button class="btn primary" id="wiSave">Save</button>
+         </div>`
       );
-
       setTimeout(() => {
         on($("#wiCancel"), "click", closeModal);
         on($("#wiSave"), "click", () => {
@@ -1584,49 +1357,30 @@
 
     // Modal close
     on($("#modalClose"), "click", closeModal);
-    on($("#modalOverlay"), "click", (e) => {
-      // click outside closes
-      if (e.target && e.target.id === "modalOverlay") closeModal();
-    });
+    on($("#modalOverlay"), "click", (e) => { if (e.target && e.target.id === "modalOverlay") closeModal(); });
 
-    // Delegated clicks (buttons created dynamically)
+    // Delegated clicks
     on(document.body, "click", (e) => {
-      const t = e.target.closest("[data-action]");
-      if (!t) return;
+      const node = e.target.closest ? e.target.closest("[data-action]") : null;
+      if (!node) return;
+      const action = node.dataset.action;
 
-      const action = t.dataset.action;
-
-      if (action === "addFood") {
-        openAddFoodFlow(t.dataset.bucket);
-        return;
-      }
-
-      if (action === "delFood") {
-        deleteFoodEntry(state.dateKey, t.dataset.bucket, t.dataset.id);
-        renderAll();
-        return;
-      }
-
-      if (action === "favFood") {
-        toggleFav(t.dataset.id);
-        return;
-      }
-
+      if (action === "addFood") return openAddFoodFlow(node.dataset.bucket);
+      if (action === "delFood") { deleteFoodEntry(state.dateKey, node.dataset.bucket, node.dataset.id); return renderAll(); }
+      if (action === "favFood") return toggleFav(node.dataset.id);
       if (action === "pickFood") {
-        const item = DB.foodLibrary.find((x) => x.id === t.dataset.id);
-        if (!item) return;
-        // default to logged if launched from library
-        openAddFoodFlow("logged", item);
+        const item = DB.foodLibrary.find((x) => x.id === node.dataset.id);
+        if (item) openAddFoodFlow("logged", item);
         return;
       }
 
       if (action === "useTemplate") {
-        const tpl = DB.templates.find((x) => x.id === t.dataset.id);
+        const tpl = DB.templates.find((x) => x.id === node.dataset.id);
         if (!tpl) return;
         const plan = ensureWorkoutPlan(state.dateKey);
         plan.templateId = tpl.id;
         plan.name = tpl.name;
-        plan.exercises = tpl.exercises.map((e) => ({ ...e, id: uid() }));
+        plan.exercises = tpl.exercises.map((e) => Object.assign({}, e, { id: uid() }));
         saveData();
         toast("Template applied ✓");
         closeModal();
@@ -1635,45 +1389,31 @@
       }
 
       if (action === "delTemplate") {
-        const id = t.dataset.id;
-        DB.templates = DB.templates.filter((x) => x.id !== id);
+        DB.templates = DB.templates.filter((x) => x.id !== node.dataset.id);
         saveData();
         toast("Template deleted");
         openTemplatesModal();
         return;
       }
 
-      if (action === "pickExercise") {
-        const name = t.dataset.name;
-        const group = t.dataset.group;
-        addExerciseToPlan(name, group);
-        return;
-      }
+      if (action === "pickExercise") return addExerciseToPlan(node.dataset.name, node.dataset.group);
 
       if (action === "delExercise") {
         const day = getDay(state.dateKey);
         if (!day.workout.planned) return;
-        day.workout.planned.exercises = day.workout.planned.exercises.filter((x) => x.id !== t.dataset.id);
+        day.workout.planned.exercises = day.workout.planned.exercises.filter((x) => x.id !== node.dataset.id);
         saveData();
         toast("Deleted");
         renderWorkouts();
         return;
       }
 
-      if (action === "startRest") {
-        startRestTimer(Number(t.dataset.sec));
-        return;
-      }
-
-      if (action === "delHistoryWorkout") {
-        deleteWorkoutFromHistory(t.dataset.id);
-        return;
-      }
+      if (action === "startRest") return startRestTimer(Number(node.dataset.sec || 0));
+      if (action === "delHistoryWorkout") return deleteWorkoutFromHistory(node.dataset.id);
 
       if (action === "selectDay") {
-        const key = t.dataset.key;
+        const key = node.dataset.key;
         setDate(key);
-        // keep calendar month in sync
         const d = fromKey(key);
         setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1));
         renderCalendar();
@@ -1681,7 +1421,7 @@
       }
 
       if (action === "delWeighIn") {
-        DB.weighIns = DB.weighIns.filter((x) => x.id !== t.dataset.id);
+        DB.weighIns = DB.weighIns.filter((x) => x.id !== node.dataset.id);
         saveData();
         toast("Deleted");
         renderAnalytics();
@@ -1692,13 +1432,14 @@
     // Delegated inputs for workout editing
     on(document.body, "input", (e) => {
       const el = e.target;
-      const id = el?.dataset?.id;
-      const field = el?.dataset?.field;
+      const id = el && el.dataset ? el.dataset.id : null;
+      const field = el && el.dataset ? el.dataset.field : null;
       if (!id || !field) return;
 
       const day = getDay(state.dateKey);
       const plan = day.workout.planned;
       if (!plan) return;
+
       const item = plan.exercises.find((x) => x.id === id);
       if (!item) return;
 
@@ -1708,71 +1449,50 @@
       saveData();
     });
 
-    // Rest timer controls (inline)
+    // Rest timer inline buttons
     on(document.body, "click", (e) => {
-      const id = e.target?.id;
-      if (id === "btnStartRest") {
+      if (e.target && e.target.id === "btnStartRest") {
         const secs = Number(prompt("Rest seconds?", "90") || 0);
         startRestTimer(secs);
       }
-      if (id === "btnStopRest") stopRestTimer();
+      if (e.target && e.target.id === "btnStopRest") stopRestTimer();
     });
-  }
-
-  /********************
-   * Escape helpers
-   ********************/
-  function escapeHTML(s) {
-    return String(s ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-  function escapeAttr(s) {
-    return escapeHTML(s).replaceAll("\n", " ");
-  }
-
-  /********************
-   * uid
-   ********************/
-  function uid() {
-    return Math.random().toString(16).slice(2) + Date.now().toString(16);
-  }
-
-  /********************
-   * Service worker (optional)
-   ********************/
-  function registerSW() {
-    if (!("serviceWorker" in navigator)) return;
-    navigator.serviceWorker.register("./service-worker.js").catch(() => {});
   }
 
   /********************
    * Init
    ********************/
   function init() {
-    // theme
-    setThemeColor(DB.settings.themeColor || "#0B1220");
+    try {
+      // Set theme immediately
+      setThemeColor(DB.settings.themeColor || "#0B1220");
 
-    // bind
-    bindEvents();
+      // Bind events + initial nav
+      bindEvents();
 
-    // initial screen
-    setScreen(state.screen);
-    setDate(state.dateKey);
+      setScreen(state.screen);
+      setDate(state.dateKey);
 
-    // calendar month sync
-    const d = fromKey(state.dateKey);
-    setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+      // Calendar month sync
+      const d = fromKey(state.dateKey);
+      setCalMonth(new Date(d.getFullYear(), d.getMonth(), 1));
 
-    // render
-    renderAll();
-
-    // SW
-    registerSW();
+      renderAll();
+      registerSW();
+    } catch (err) {
+      // If anything goes wrong, NEVER trap the user on the launch overlay.
+      // eslint-disable-next-line no-console
+      console.error("GlenTrack init error:", err);
+      toast("Error: open Safari console");
+    } finally {
+      hideLaunchOverlaySoon();
+    }
   }
 
-  init();
+  // Dismiss launch overlay on DOM ready AND window load (belt + suspenders for Safari)
+  on(document, "DOMContentLoaded", () => {
+    init();
+    hideLaunchOverlaySoon();
+  });
+  on(window, "load", hideLaunchOverlaySoon);
 })();
