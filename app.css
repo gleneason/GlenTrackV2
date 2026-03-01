@@ -80,7 +80,7 @@ body{
 /* Layout */
 .app{
   padding: 16px;
-  padding-bottom: calc(160px + var(--safeBottom));
+  padding-bottom: calc(170px + var(--safeBottom));
 }
 
 .screen{ display:none; }
