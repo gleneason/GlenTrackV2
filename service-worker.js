@@ -1,5 +1,5 @@
 /* Glen Track SW — cache-busted version */
-const CACHE = "glentrack-cache-v2026.03.01";
+const CACHE = "glentrack-cache-v2026.03.02";
 const ASSETS = [
   "./",
   "./index.html",
