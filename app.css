@@ -438,3 +438,74 @@ body{
   .brandName{ font-size: 24px; }
   .formGrid{ grid-template-columns: 1fr; }
 }
+
+/* ===== Macro Rings (stacked) ===== */
+
+.macroRings {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.05);
+}
+
+.ringStack {
+  width: 132px;
+  height: 132px;
+  flex: 0 0 auto;
+}
+
+.ringLegend {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.legendRow{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+}
+
+.legendDot{
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex: 0 0 auto;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.legendText{
+  min-width:0;
+}
+
+.legendTitle{
+  font-weight: 900;
+  line-height: 1.05;
+}
+
+.legendSub{
+  color: var(--muted);
+  font-weight: 800;
+  margin-top: 3px;
+  word-break: break-word;
+}
+
+.ringTrack {
+  stroke: rgba(255,255,255,0.10);
+  fill: none;
+}
+
+.ringStroke {
+  fill: none;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
